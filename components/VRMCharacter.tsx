@@ -29,8 +29,10 @@ export default function VRMCharacter() {
       if (!canvas) return
 
       scene = new THREE.Scene()
-      camera = new THREE.PerspectiveCamera(30, canvas.clientWidth / canvas.clientHeight, 0.1, 20)
-      camera.position.set(0, 1.4, 3)
+      // 📸 FOV aumentado de 30 a 35 para un poco más de perspectiva
+      camera = new THREE.PerspectiveCamera(35, canvas.clientWidth / canvas.clientHeight, 0.1, 20)
+      // 📏 Cámara más cerca: Z reducido de 3 a 2 para que el personaje se vea más grande
+      camera.position.set(0, 1.4, 2)
 
       renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true })
       renderer.setSize(canvas.clientWidth, canvas.clientHeight)
@@ -41,8 +43,10 @@ export default function VRMCharacter() {
       controls.target.set(0, 1.2, 0)
       controls.enableDamping = true
       controls.dampingFactor = 0.05
-      controls.minDistance = 1.5
-      controls.maxDistance = 5
+      // 🔍 Distancia mínima reducida de 1.5 a 1.0 para permitir acercarse más
+      controls.minDistance = 1.0
+      // 🔍 Distancia máxima reducida de 5 a 4
+      controls.maxDistance = 4
       controls.maxPolarAngle = Math.PI / 1.5
       controls.update()
 

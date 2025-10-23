@@ -28,19 +28,21 @@ export default function TropicalSadnessLanding() {
     return <LoadingScreen onComplete={() => setIsLoading(false)} />
   }
 
-  const bgColor = "#5BC0DE"
-  const gradient1 = "linear-gradient(to top, #2C7A3F 60%, transparent 60%)"
-  const gradient2 = "linear-gradient(to top, #2C7A3F 60%, transparent 60%)"
-
   return (
     // 🎭 ANIMACIONES DESACTIVADAS - Para activar, descomenta <AnimationProvider> arriba y abajo
     // <AnimationProvider>
     <>
-      <div className="relative w-full h-screen overflow-hidden" style={{ backgroundColor: bgColor }}>
-        <div className="absolute inset-0">
-          <div className="absolute bottom-0 left-10 w-32 h-64 opacity-20" style={{ background: gradient1 }} />
-          <div className="absolute bottom-0 right-20 w-24 h-48 opacity-20" style={{ background: gradient2 }} />
-        </div>
+      <div 
+        className="relative w-full h-screen overflow-hidden" 
+        style={{ 
+          backgroundImage: "url('/background.jpg')",
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat"
+        }}
+      >
+        {/* Overlay oscuro opcional para mejor legibilidad */}
+        <div className="absolute inset-0 bg-black/20" />
 
         <div className="absolute top-8 left-8 z-10">
           <div
