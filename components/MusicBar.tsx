@@ -17,9 +17,7 @@ export default function MusicBar() {
   const [duration, setDuration] = useState(0)
 
   const tracks: Track[] = [
-    { title: "Sunset Drive", file: "/mixes/track1.mp3" },
-    { title: "Beach Memories", file: "/mixes/track2.mp3" },
-    { title: "Neon Dreams", file: "/mixes/track3.mp3" },
+    { title: "MERENGOTHICA HALLOWEEN MIX 2025", file: "/mixes/track1.mp3" },
   ]
 
   useEffect(() => {
@@ -79,7 +77,7 @@ export default function MusicBar() {
   return (
     <div
       className="fixed bottom-0 left-0 right-0 border-t-4 border-white px-6 py-3 z-40"
-      style={{ backgroundColor: "rgba(91, 192, 222, 0.95)" }}
+      style={{ backgroundColor: "rgba(91, 192, 222, 0.5)" }}
     >
       <audio ref={audioRef} src={tracks[currentTrack].file} />
 
@@ -89,7 +87,7 @@ export default function MusicBar() {
           <Music className="w-6 h-6 text-white flex-shrink-0" />
           <div className="flex-1 min-w-0">
             <p className="text-white font-bold text-sm truncate">{tracks[currentTrack].title}</p>
-            <p className="text-white/70 text-xs">Tropical Sadness</p>
+            <p className="text-white/70 text-xs">Nhil Ov Curse</p>
           </div>
         </div>
 

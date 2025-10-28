@@ -44,21 +44,17 @@ export default function TropicalSadnessLanding() {
         {/* Overlay oscuro opcional para mejor legibilidad */}
         <div className="absolute inset-0 bg-black/20" />
 
+        {/* 🎨 Logo en lugar de texto */}
         <div className="absolute top-8 left-8 z-10">
-          <div
-            className="text-5xl font-black tracking-tight"
+          <img
+            src="/logo.png"
+            alt="Tropical Sadness"
+            className="w-auto h-32 object-contain"
             style={{
-              color: "#FFD700",
-              textShadow: "3px 3px 0 #E94E77, 6px 6px 0 rgba(0,0,0,0.2)",
-              fontFamily: "Impact, Arial Black, sans-serif",
-              letterSpacing: "-2px",
+              filter: "drop-shadow(3px 3px 0 #E94E77) drop-shadow(6px 6px 0 rgba(0,0,0,0.2))",
             }}
-          >
-            TROPICAL
-            <br />
-            SADNESS
-          </div>
-          <div className="text-sm text-center font-bold text-white mt-1">
+          />
+          <div className="text-sm text-center font-bold text-white mt-2">
             ★ CREW ★
           </div>
         </div>

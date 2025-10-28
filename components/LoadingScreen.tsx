@@ -42,17 +42,16 @@ export default function LoadingScreen({ onComplete }: LoadingScreenProps) {
       </div>
 
       <div className="relative z-10 text-center">
-        <div
-          className="text-8xl font-black mb-8 animate-pulse"
-          style={{
-            color: "#FFD700",
-            textShadow: "4px 4px 0 #E94E77, 8px 8px 0 rgba(0,0,0,0.2)",
-            fontFamily: "Impact, Arial Black, sans-serif",
-          }}
-        >
-          TROPICAL
-          <br />
-          SADNESS
+        {/* 🎨 Logo con efecto de sombra */}
+        <div className="mb-8 animate-pulse flex justify-center">
+          <img
+            src="/logo.png"
+            alt="Tropical Sadness"
+            className="w-auto h-48 object-contain"
+            style={{
+              filter: "drop-shadow(4px 4px 0 #E94E77) drop-shadow(8px 8px 0 rgba(0,0,0,0.2))",
+            }}
+          />
         </div>
 
         <div className="w-64 h-2 bg-white/30 rounded-full overflow-hidden mx-auto">
