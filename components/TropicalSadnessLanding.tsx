@@ -49,7 +49,7 @@ export default function TropicalSadnessLanding() {
           <img
             src="/logo.png"
             alt="Tropical Sadness"
-            className="w-auto h-32 object-contain"
+            className="w-auto h-200 object-contain"
             style={{
               filter: "drop-shadow(3px 3px 0 #E94E77) drop-shadow(6px 6px 0 rgba(0,0,0,0.2))",
             }}
