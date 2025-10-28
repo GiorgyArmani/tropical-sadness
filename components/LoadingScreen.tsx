@@ -47,7 +47,7 @@ export default function LoadingScreen({ onComplete }: LoadingScreenProps) {
           <img
             src="/logo.png"
             alt="Tropical Sadness"
-            className="w-auto h-500 object-contain"
+            className="w-auto h-100 object-contain"
             style={{
               filter: "drop-shadow(4px 4px 0 #E94E77) drop-shadow(8px 8px 0 rgba(0,0,0,0.2))",
             }}
