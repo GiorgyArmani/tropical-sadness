@@ -8,7 +8,11 @@ interface Track {
   file: string
 }
 
-export default function MusicBar() {
+interface MusicBarProps {
+  autoplay?: boolean  // ✅ Nueva prop para autoplay
+}
+
+export default function MusicBar({ autoplay = false }: MusicBarProps) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTrack, setCurrentTrack] = useState(0)
@@ -19,6 +23,31 @@ export default function MusicBar() {
   const tracks: Track[] = [
     { title: "MERENGOTHICA HALLOWEEN MIX 2025", file: "/mixes/track1.mp3" },
   ]
+
+  // ✅ AUTOPLAY: Inicia automáticamente cuando se activa
+  useEffect(() => {
+    if (autoplay && audioRef.current) {
+      const timer = setTimeout(() => {
+        playAudio()
+      }, 100)
+
+      return () => clearTimeout(timer)
+    }
+  }, [autoplay])
+
+  // ✅ Función para iniciar el audio automáticamente
+  const playAudio = async () => {
+    if (audioRef.current) {
+      try {
+        await audioRef.current.play()
+        setIsPlaying(true)
+        console.log("🎵 Audio playing automatically")
+      } catch (error) {
+        console.log("⚠️ Autoplay was blocked by browser:", error)
+        console.log("💡 User needs to click play button manually")
+      }
+    }
+  }
 
   useEffect(() => {
     const audio = audioRef.current
@@ -77,7 +106,7 @@ export default function MusicBar() {
   return (
     <div
       className="fixed bottom-0 left-0 right-0 border-t-4 border-white px-6 py-3 z-40"
-      style={{ backgroundColor: "rgba(91, 192, 222, 0.5)" }}
+      style={{ backgroundColor: "rgba(91, 192, 222, 0.1)" }}
     >
       <audio ref={audioRef} src={tracks[currentTrack].file} />
 
