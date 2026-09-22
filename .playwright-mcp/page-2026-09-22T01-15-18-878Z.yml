@@ -1,0 +1,173 @@
+- generic [active] [ref=e1]:
+  - navigation [ref=e2]:
+    - generic [ref=e3]:
+      - link "Credit Banc home" [ref=e4] [cursor=pointer]:
+        - /url: /
+        - img "Credit Banc, Powered by Shield Advisory Group" [ref=e5]
+      - generic [ref=e6]:
+        - link "SBA Financing" [ref=e8] [cursor=pointer]:
+          - /url: /sba-loans
+        - link "Real Estate Financing" [ref=e13] [cursor=pointer]:
+          - /url: /real-estate-financing
+        - link "Small Business Funding" [ref=e18] [cursor=pointer]:
+          - /url: /small-business-funding
+        - link "About" [ref=e23] [cursor=pointer]:
+          - /url: /about
+        - link "Resources" [ref=e28] [cursor=pointer]:
+          - /url: /resources
+      - generic [ref=e30]:
+        - link "Login" [ref=e31] [cursor=pointer]:
+          - /url: https://vault.creditbanc.io/auth/login
+        - link "Apply Now" [ref=e32] [cursor=pointer]:
+          - /url: /apply-now
+  - main [ref=e34]:
+    - generic [ref=e37]:
+      - heading "Funding Is Our Favorite F Word" [level=1] [ref=e38]:
+        - text: Funding Is Our Favorite
+        - generic [ref=e39]: F Word
+      - generic [ref=e40]: "|"
+      - paragraph [ref=e43]:
+        - text: Get working capital for growth, payroll, inventory, equipment, or cash-flow gaps, with monthly payment options and real Advisor guidance. Because
+        - emphasis [ref=e44]: “you’re approved”
+        - text: is not the same as
+        - emphasis [ref=e45]: “this is a good idea.”
+      - link "Get Funded" [ref=e47] [cursor=pointer]:
+        - /url: /apply-now
+    - generic [ref=e61]:
+      - generic [ref=e62]:
+        - generic [ref=e63]: $0B+
+        - paragraph [ref=e65]: Dollars
+        - paragraph [ref=e66]: Put to Work
+      - generic [ref=e67]:
+        - generic [ref=e68]: 0k+
+        - paragraph [ref=e70]: Businesses Funded.
+        - paragraph [ref=e71]: Headaches Downgraded
+      - generic [ref=e72]:
+        - generic [ref=e73]: 24h
+        - paragraph [ref=e75]: Average Time Spent Waiting For An Offer
+      - generic [ref=e76]:
+        - generic [ref=e77]: "0"
+        - paragraph [ref=e79]: Funding Applications Reviewed by Robots
+    - generic [ref=e82]:
+      - paragraph [ref=e83]: Financial Solutions
+      - heading "Different Needs Require Different Funding. Shocking, We Know." [level=2] [ref=e84]:
+        - generic [ref=e85]: Different Needs Require Different Funding.
+        - generic [ref=e86]: Shocking, We Know.
+      - paragraph [ref=e87]:
+        - generic [ref=e88]: Drag to spin.
+        - generic [ref=e95]: "|"
+        - generic [ref=e96]: Tap any program to see how it works, what it’s for, and who it fits.
+      - paragraph [ref=e103]:
+        - text: (Not sure which one fits? That’s normal.
+        - link "Click here" [ref=e104] [cursor=pointer]:
+          - /url: /apply-now?appointment_source=products_advisor_link
+        - text: to speak with an Advisor.)
+    - generic [ref=e110]:
+      - img "First, tell us what the money needs to do." [ref=e114]
+      - generic [ref=e115]:
+        - paragraph [ref=e116]: The Human Edge
+        - heading "Funding Works Better With a Human in the Room" [level=2] [ref=e117]
+        - paragraph [ref=e118]: Here’s what that looks like.
+        - generic [ref=e120]:
+          - generic [ref=e121]:
+            - generic [ref=e122] [cursor=pointer]: "1"
+            - generic [ref=e126] [cursor=pointer]: "2"
+            - generic [ref=e130] [cursor=pointer]: "3"
+            - generic [ref=e134] [cursor=pointer]: "4"
+          - generic [ref=e139]:
+            - heading "First, tell us what the money needs to do." [level=4] [ref=e140]
+            - generic [ref=e141]:
+              - paragraph [ref=e142]: Buy equipment. Cover cash flow. Refinance debt. Fund a project. Move on a property. Hire people. Clean up a mess. Jump on an opportunity before your bank finishes forming a committee.
+              - paragraph [ref=e143]: Whatever the move is, the money needs a job before it needs a product.
+          - button "Next Step" [ref=e146] [cursor=pointer]
+    - region [ref=e147]:
+      - generic [ref=e148]:
+        - generic [ref=e149]:
+          - paragraph [ref=e150]: Frequently Asked Questions
+          - heading "Questions Worth Asking Before You Borrow" [level=2] [ref=e151]
+          - paragraph [ref=e152]: Call us old-fashioned, but you should know who you're getting into bed with before the fine print takes its pants off.
+        - button [ref=e154] [cursor=pointer]
+    - generic [ref=e161]:
+      - heading "Not sure what kind of funding you need?" [level=2] [ref=e162]
+      - paragraph [ref=e163]: Good. That means you probably haven’t been sold the wrong thing yet.
+      - paragraph [ref=e164]: Tell us what you need the money to do. Buy equipment? Cover cash flow? Refinance debt? Fund a project? Move on a property? Whatever it is, we’ll help match the need to the right solution.
+      - generic [ref=e165]:
+        - link "Get Pre-Qualified Today" [ref=e166] [cursor=pointer]:
+          - /url: /apply-now
+        - 'link "Talk to an Advisor: 321-334-5099" [ref=e167] [cursor=pointer]':
+          - /url: tel:+13213345099
+  - contentinfo [ref=e168]:
+    - generic [ref=e169]:
+      - generic [ref=e170]:
+        - img "Credit Banc" [ref=e171]
+        - paragraph [ref=e172]: Credit Banc helps business owners compare financing options across working capital, SBA, and real estate, with Advisors who guide the process from start to finish.
+        - heading "Follow Us" [level=5] [ref=e173]
+        - generic [ref=e174]:
+          - link "Facebook" [ref=e175] [cursor=pointer]:
+            - /url: https://www.facebook.com/creditbanc
+          - link "Instagram" [ref=e178] [cursor=pointer]:
+            - /url: https://www.instagram.com/credit_banc/
+          - link "LinkedIn" [ref=e182] [cursor=pointer]:
+            - /url: https://www.linkedin.com/company/credit-banc
+          - link "YouTube" [ref=e187] [cursor=pointer]:
+            - /url: https://www.youtube.com/@Credit_Banc
+          - link "Trustpilot" [ref=e191] [cursor=pointer]:
+            - /url: https://www.trustpilot.com/review/creditbanc.io
+      - generic [ref=e194]:
+        - heading "Programs" [level=5] [ref=e195]
+        - list [ref=e196]:
+          - listitem [ref=e197]:
+            - link "SBA Loans" [ref=e198] [cursor=pointer]:
+              - /url: /sba-loans
+          - listitem [ref=e199]:
+            - link "Real Estate Loans" [ref=e200] [cursor=pointer]:
+              - /url: /real-estate-financing
+          - listitem [ref=e201]:
+            - link "Small Business Funding" [ref=e202] [cursor=pointer]:
+              - /url: /small-business-funding
+          - listitem [ref=e203]:
+            - link "Our Process" [ref=e204] [cursor=pointer]:
+              - /url: /about#process
+      - generic [ref=e205]:
+        - heading "Company" [level=5] [ref=e206]
+        - list [ref=e207]:
+          - listitem [ref=e208]:
+            - link "About Us" [ref=e209] [cursor=pointer]:
+              - /url: /about
+          - listitem [ref=e210]:
+            - link "In the Spotlight" [ref=e211] [cursor=pointer]:
+              - /url: /about#spotlight
+          - listitem [ref=e212]:
+            - link "Call Us — 321-334-5099" [ref=e213] [cursor=pointer]:
+              - /url: tel:+13213345099
+      - generic [ref=e214]:
+        - heading "Resources" [level=5] [ref=e215]
+        - list [ref=e216]:
+          - listitem [ref=e217]:
+            - link "Blog" [ref=e218] [cursor=pointer]:
+              - /url: /blog
+          - listitem [ref=e219]:
+            - link "Apply for Funding" [ref=e220] [cursor=pointer]:
+              - /url: /apply-now
+          - listitem [ref=e221]:
+            - link "Privacy Policy" [ref=e222] [cursor=pointer]:
+              - /url: /privacypolicy
+          - listitem [ref=e223]:
+            - link "support@creditbanc.io" [ref=e227] [cursor=pointer]:
+              - /url: mailto:support@creditbanc.io
+    - generic [ref=e228]:
+      - paragraph [ref=e229]:
+        - text: Need to contact us? Please email the team at
+        - link "support@creditbanc.io" [ref=e230] [cursor=pointer]:
+          - /url: mailto:support@creditbanc.io
+        - text: .
+      - generic [ref=e231]:
+        - link "Privacy Policy" [ref=e232] [cursor=pointer]:
+          - /url: /privacypolicy
+        - link "Apply for Funding" [ref=e233] [cursor=pointer]:
+          - /url: /apply-now
+        - generic [ref=e234]: Copyright 2026. Credit Banc. All Rights Reserved.
+  - button "Open support menu" [ref=e236] [cursor=pointer]:
+    - generic [ref=e241]: Support
+  - button "Open Next.js Dev Tools" [ref=e247] [cursor=pointer]
+  - alert [ref=e251]

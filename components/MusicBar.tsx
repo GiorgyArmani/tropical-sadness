@@ -1,15 +1,27 @@
 "use client"
 
-import { useRef, useState, useEffect } from "react"
-import { Music, Play, Pause, SkipForward, SkipBack, Volume2 } from "lucide-react"
+import { useRef, useState, useEffect, type CSSProperties } from "react"
+import { Play, Pause, SkipForward, SkipBack, Volume2, VolumeX } from "lucide-react"
 
 interface Track {
   title: string
+  artist: string
   file: string
 }
 
 interface MusicBarProps {
-  autoplay?: boolean  // ✅ Nueva prop para autoplay
+  autoplay?: boolean
+}
+
+const tracks: Track[] = [
+  { title: "MERENGOTHICA HALLOWEEN MIX 2025", artist: "Nhil Ov Curse", file: "/mixes/track1.mp3" },
+]
+
+const formatTime = (time: number) => {
+  if (!Number.isFinite(time)) return "0:00"
+  const mins = Math.floor(time / 60)
+  const secs = Math.floor(time % 60)
+  return `${mins}:${secs.toString().padStart(2, "0")}`
 }
 
 export default function MusicBar({ autoplay = false }: MusicBarProps) {
@@ -17,163 +29,151 @@ export default function MusicBar({ autoplay = false }: MusicBarProps) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTrack, setCurrentTrack] = useState(0)
   const [volume, setVolume] = useState(70)
+  const [muted, setMuted] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
 
-  const tracks: Track[] = [
-    { title: "MERENGOTHICA HALLOWEEN MIX 2025", file: "/mixes/track1.mp3" },
-  ]
+  const hasMultiple = tracks.length > 1
+  const progress = duration ? (currentTime / duration) * 100 : 0
 
-  // ✅ AUTOPLAY: Inicia automáticamente cuando se activa
   useEffect(() => {
-    if (autoplay && audioRef.current) {
-      const timer = setTimeout(() => {
-        playAudio()
-      }, 100)
-
-      return () => clearTimeout(timer)
-    }
+    if (!autoplay) return
+    audioRef.current?.play().catch(() => {
+      // El navegador bloqueó el autoplay; el usuario puede darle play manualmente
+    })
   }, [autoplay])
-
-  // ✅ Función para iniciar el audio automáticamente
-  const playAudio = async () => {
-    if (audioRef.current) {
-      try {
-        await audioRef.current.play()
-        setIsPlaying(true)
-        console.log("🎵 Audio playing automatically")
-      } catch (error) {
-        console.log("⚠️ Autoplay was blocked by browser:", error)
-        console.log("💡 User needs to click play button manually")
-      }
-    }
-  }
 
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
 
-    const updateTime = () => setCurrentTime(audio.currentTime)
-    const updateDuration = () => setDuration(audio.duration)
-    const handleEnd = () => handleNext()
-
-    audio.addEventListener("timeupdate", updateTime)
-    audio.addEventListener("loadedmetadata", updateDuration)
-    audio.addEventListener("ended", handleEnd)
-
-    return () => {
-      audio.removeEventListener("timeupdate", updateTime)
-      audio.removeEventListener("loadedmetadata", updateDuration)
-      audio.removeEventListener("ended", handleEnd)
+    const onTime = () => setCurrentTime(audio.currentTime)
+    const onMeta = () => setDuration(audio.duration)
+    const onPlay = () => setIsPlaying(true)
+    const onPause = () => setIsPlaying(false)
+    const onEnd = () => {
+      if (hasMultiple) setCurrentTrack((prev) => (prev + 1) % tracks.length)
     }
-  }, [])
+
+    audio.addEventListener("timeupdate", onTime)
+    audio.addEventListener("loadedmetadata", onMeta)
+    audio.addEventListener("play", onPlay)
+    audio.addEventListener("pause", onPause)
+    audio.addEventListener("ended", onEnd)
+    return () => {
+      audio.removeEventListener("timeupdate", onTime)
+      audio.removeEventListener("loadedmetadata", onMeta)
+      audio.removeEventListener("play", onPlay)
+      audio.removeEventListener("pause", onPause)
+      audio.removeEventListener("ended", onEnd)
+    }
+  }, [hasMultiple])
 
   useEffect(() => {
     if (audioRef.current) {
       audioRef.current.volume = volume / 100
+      audioRef.current.muted = muted
     }
-  }, [volume])
+  }, [volume, muted])
 
   const togglePlay = () => {
-    if (audioRef.current) {
-      if (isPlaying) {
-        audioRef.current.pause()
-      } else {
-        audioRef.current.play()
-      }
-      setIsPlaying(!isPlaying)
-    }
+    const audio = audioRef.current
+    if (!audio) return
+    if (audio.paused) audio.play().catch(() => {})
+    else audio.pause()
   }
 
-  const handleNext = () => {
-    setCurrentTrack((prev) => (prev + 1) % tracks.length)
-    setIsPlaying(true)
-    setTimeout(() => audioRef.current?.play(), 100)
+  const changeTrack = (dir: 1 | -1) => {
+    setCurrentTrack((prev) => (prev + dir + tracks.length) % tracks.length)
+    setTimeout(() => audioRef.current?.play().catch(() => {}), 100)
   }
 
-  const handlePrev = () => {
-    setCurrentTrack((prev) => (prev - 1 + tracks.length) % tracks.length)
-    setIsPlaying(true)
-    setTimeout(() => audioRef.current?.play(), 100)
-  }
+  const track = tracks[currentTrack]
 
-  const formatTime = (time: number) => {
-    const mins = Math.floor(time / 60)
-    const secs = Math.floor(time % 60)
-    return `${mins}:${secs.toString().padStart(2, "0")}`
-  }
+  const iconBtn =
+    "flex h-8 w-8 flex-shrink-0 cursor-pointer items-center justify-center rounded-full text-white/60 transition-colors duration-200 hover:text-white focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/60"
 
   return (
     <div
-      className="fixed bottom-0 left-0 right-0 border-t-4 border-white px-6 py-3 z-40"
-      style={{ backgroundColor: "rgba(91, 192, 222, 0.1)" }}
+      role="region"
+      aria-label="Reproductor de música"
+      className="fixed inset-x-0 bottom-0 z-40 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2 sm:px-8"
     >
-      <audio ref={audioRef} src={tracks[currentTrack].file} />
+      <audio ref={audioRef} src={track.file} preload="metadata" />
 
-      <div className="max-w-7xl mx-auto flex items-center gap-4">
-        {/* Track Info */}
-        <div className="flex items-center gap-3 min-w-[200px]">
-          <Music className="w-6 h-6 text-white flex-shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="text-white font-bold text-sm truncate">{tracks[currentTrack].title}</p>
-            <p className="text-white/70 text-xs">Nhil Ov Curse</p>
-          </div>
-        </div>
-
-        {/* Controls */}
-        <div className="flex items-center gap-3">
-          <button onClick={handlePrev} className="text-white hover:text-yellow-400 transition-colors">
-            <SkipBack className="w-5 h-5" />
+      <div className="mx-auto flex max-w-3xl items-center gap-3 sm:gap-4">
+        {hasMultiple && (
+          <button type="button" onClick={() => changeTrack(-1)} aria-label="Pista anterior" className={iconBtn}>
+            <SkipBack className="h-3.5 w-3.5" strokeWidth={1.5} />
           </button>
+        )}
 
-          <button
-            onClick={togglePlay}
-            className="w-10 h-10 rounded-full bg-white flex items-center justify-center hover:bg-yellow-400 transition-all transform hover:scale-110"
-          >
-            {isPlaying ? (
-              <Pause className="w-5 h-5 text-gray-900" />
-            ) : (
-              <Play className="w-5 h-5 text-gray-900 ml-0.5" />
-            )}
+        <button
+          type="button"
+          onClick={togglePlay}
+          aria-label={isPlaying ? "Pausar" : "Reproducir"}
+          className={`${iconBtn} text-white`}
+        >
+          {isPlaying ? (
+            <Pause className="h-4 w-4" strokeWidth={1.5} />
+          ) : (
+            <Play className="ml-0.5 h-4 w-4" strokeWidth={1.5} />
+          )}
+        </button>
+
+        {hasMultiple && (
+          <button type="button" onClick={() => changeTrack(1)} aria-label="Siguiente pista" className={iconBtn}>
+            <SkipForward className="h-3.5 w-3.5" strokeWidth={1.5} />
           </button>
+        )}
 
-          <button onClick={handleNext} className="text-white hover:text-yellow-400 transition-colors">
-            <SkipForward className="w-5 h-5" />
-          </button>
-        </div>
+        <p className="hidden min-w-0 max-w-[22rem] truncate text-[11px] uppercase tracking-[0.18em] text-white/70 md:block" title={`${track.title} — ${track.artist}`}>
+          {track.title}
+          <span className="text-white/35"> · {track.artist}</span>
+        </p>
 
-        {/* Progress Bar */}
-        <div className="flex-1 flex items-center gap-3">
-          <span className="text-white/70 text-xs min-w-[40px]">{formatTime(currentTime)}</span>
-          <input
-            type="range"
-            min="0"
-            max={duration || 100}
-            value={currentTime}
-            onChange={(e) => {
-              const audio = audioRef.current
-              if (audio) audio.currentTime = Number(e.target.value)
-            }}
-            className="flex-1 h-1 bg-white/30 rounded-full appearance-none cursor-pointer"
-            style={{
-              background: `linear-gradient(to right, #FFD700 0%, #FFD700 ${(currentTime / duration) * 100}%, rgba(255,255,255,0.3) ${(currentTime / duration) * 100}%, rgba(255,255,255,0.3) 100%)`,
-            }}
-          />
-          <span className="text-white/70 text-xs min-w-[40px]">{formatTime(duration)}</span>
-        </div>
+        <span className="font-mono text-[10px] tabular-nums text-white/40">{formatTime(currentTime)}</span>
+        <input
+          type="range"
+          min={0}
+          max={duration || 0}
+          step="any"
+          value={currentTime}
+          aria-label="Posición de la pista"
+          aria-valuetext={`${formatTime(currentTime)} de ${formatTime(duration)}`}
+          onChange={(e) => {
+            if (audioRef.current) audioRef.current.currentTime = Number(e.target.value)
+          }}
+          className="ts-range min-w-0 flex-1"
+          style={{ "--fill": `${progress}%` } as CSSProperties}
+        />
+        <span className="font-mono text-[10px] tabular-nums text-white/40">{formatTime(duration)}</span>
 
-        {/* Volume */}
-        <div className="flex items-center gap-2 min-w-[120px]">
-          <Volume2 className="w-4 h-4 text-white flex-shrink-0" />
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={volume}
-            onChange={(e) => setVolume(Number(e.target.value))}
-            className="flex-1 h-1 bg-white/30 rounded-full appearance-none cursor-pointer"
-          />
-        </div>
+        <button
+          type="button"
+          onClick={() => setMuted((m) => !m)}
+          aria-label={muted ? "Activar sonido" : "Silenciar"}
+          className={iconBtn}
+        >
+          {muted || volume === 0 ? (
+            <VolumeX className="h-3.5 w-3.5" strokeWidth={1.5} />
+          ) : (
+            <Volume2 className="h-3.5 w-3.5" strokeWidth={1.5} />
+          )}
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={muted ? 0 : volume}
+          aria-label="Volumen"
+          onChange={(e) => {
+            setVolume(Number(e.target.value))
+            setMuted(false)
+          }}
+          className="ts-range hidden w-16 sm:block"
+          style={{ "--fill": `${muted ? 0 : volume}%` } as CSSProperties}
+        />
       </div>
     </div>
   )

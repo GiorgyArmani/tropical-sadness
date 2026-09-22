@@ -8,7 +8,7 @@ const _geist = Geist({ subsets: ["latin"] })
 const _geistMono = Geist_Mono({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "Tropical Sadness - Art Collective",
+  title: "Tropical Sadness 革命 — Sitio en progreso",
   description:
     "Where sadness meets sunshine. Vaporwave art collective exploring nostalgia, music, and tropical aesthetics.",
   generator: "v0.app",
@@ -20,8 +20,8 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
-      <body className={`font-sans antialiased`}>
+    <html lang="es" className="bg-black">
+      <body className={`font-sans antialiased bg-black`}>
         {children}
         <Analytics />
       </body>

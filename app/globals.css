@@ -123,3 +123,65 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ── Tropical Sadness · WIP landing ───────────────────────── */
+.logo-float {
+  animation: ts-float 6s ease-in-out infinite;
+}
+@keyframes ts-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.ts-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 24px;
+  background: transparent;
+  cursor: pointer;
+}
+.ts-range::-webkit-slider-runnable-track {
+  height: 1px;
+  background: linear-gradient(to right, rgba(255, 255, 255, 0.85) var(--fill, 0%), rgba(255, 255, 255, 0.15) var(--fill, 0%));
+}
+.ts-range::-moz-range-track {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.15);
+}
+.ts-range::-moz-range-progress {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.85);
+}
+.ts-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 7px;
+  height: 7px;
+  margin-top: -3px;
+  border-radius: 9999px;
+  background: #fff;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+.ts-range::-moz-range-thumb {
+  width: 7px;
+  height: 7px;
+  border: 0;
+  border-radius: 9999px;
+  background: #fff;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+.ts-range:hover::-webkit-slider-thumb,
+.ts-range:focus-visible::-webkit-slider-thumb { opacity: 1; }
+.ts-range:hover::-moz-range-thumb,
+.ts-range:focus-visible::-moz-range-thumb { opacity: 1; }
+.ts-range:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.5);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logo-float {
+    animation: none;
+  }
+}
