@@ -141,34 +141,34 @@
   cursor: pointer;
 }
 .ts-range::-webkit-slider-runnable-track {
-  height: 1px;
-  background: linear-gradient(to right, rgba(255, 255, 255, 0.85) var(--fill, 0%), rgba(255, 255, 255, 0.15) var(--fill, 0%));
+  height: 3px;
+  background: linear-gradient(to right, #ffd600 var(--fill, 0%), rgba(255, 255, 255, 0.3) var(--fill, 0%));
 }
 .ts-range::-moz-range-track {
-  height: 1px;
-  background: rgba(255, 255, 255, 0.15);
+  height: 3px;
+  background: rgba(255, 255, 255, 0.3);
 }
 .ts-range::-moz-range-progress {
-  height: 1px;
-  background: rgba(255, 255, 255, 0.85);
+  height: 3px;
+  background: #ffd600;
 }
 .ts-range::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 7px;
-  height: 7px;
-  margin-top: -3px;
-  border-radius: 9999px;
-  background: #fff;
-  opacity: 0;
+  width: 11px;
+  height: 11px;
+  margin-top: -4px;
+  border-radius: 0;
+  background: #ffd600;
+  opacity: 1;
   transition: opacity 150ms ease-out;
 }
 .ts-range::-moz-range-thumb {
-  width: 7px;
-  height: 7px;
+  width: 11px;
+  height: 11px;
   border: 0;
-  border-radius: 9999px;
-  background: #fff;
-  opacity: 0;
+  border-radius: 0;
+  background: #ffd600;
+  opacity: 1;
   transition: opacity 150ms ease-out;
 }
 .ts-range:hover::-webkit-slider-thumb,
@@ -184,4 +184,9 @@
   .logo-float {
     animation: none;
   }
+}
+
+/* Líneas de barrido CRT sobre el arte ASCII */
+.ascii-scanlines {
+  background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0) 0 2px, rgba(0, 0, 0, 0.18) 2px 3px);
 }

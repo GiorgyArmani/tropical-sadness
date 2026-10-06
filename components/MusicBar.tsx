@@ -91,7 +91,7 @@ export default function MusicBar({ autoplay = false }: MusicBarProps) {
   const track = tracks[currentTrack]
 
   const iconBtn =
-    "flex h-8 w-8 flex-shrink-0 cursor-pointer items-center justify-center rounded-full text-white/60 transition-colors duration-200 hover:text-white focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/60"
+    "flex h-9 w-9 flex-shrink-0 cursor-pointer items-center justify-center text-white/80 transition-colors duration-200 hover:text-[#FFD600] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FFD600]"
 
   return (
     <div
@@ -101,79 +101,88 @@ export default function MusicBar({ autoplay = false }: MusicBarProps) {
     >
       <audio ref={audioRef} src={track.file} preload="metadata" />
 
-      <div className="mx-auto flex max-w-3xl items-center gap-3 sm:gap-4">
-        {hasMultiple && (
-          <button type="button" onClick={() => changeTrack(-1)} aria-label="Pista anterior" className={iconBtn}>
-            <SkipBack className="h-3.5 w-3.5" strokeWidth={1.5} />
-          </button>
-        )}
-
-        <button
-          type="button"
-          onClick={togglePlay}
-          aria-label={isPlaying ? "Pausar" : "Reproducir"}
-          className={`${iconBtn} text-white`}
+      <div className="mx-auto max-w-3xl border border-white/60 bg-black/85 px-3 py-2 font-mono backdrop-blur-sm sm:px-4">
+        <p
+          className="mb-1 truncate text-center text-[11px] uppercase tracking-[0.15em] text-white md:hidden"
+          title={`${track.title} — ${track.artist}`}
         >
-          {isPlaying ? (
-            <Pause className="h-4 w-4" strokeWidth={1.5} />
-          ) : (
-            <Play className="ml-0.5 h-4 w-4" strokeWidth={1.5} />
-          )}
-        </button>
-
-        {hasMultiple && (
-          <button type="button" onClick={() => changeTrack(1)} aria-label="Siguiente pista" className={iconBtn}>
-            <SkipForward className="h-3.5 w-3.5" strokeWidth={1.5} />
-          </button>
-        )}
-
-        <p className="hidden min-w-0 max-w-[22rem] truncate text-[11px] uppercase tracking-[0.18em] text-white/70 md:block" title={`${track.title} — ${track.artist}`}>
           {track.title}
-          <span className="text-white/35"> · {track.artist}</span>
+          <span className="text-white/60"> · {track.artist}</span>
         </p>
-
-        <span className="font-mono text-[10px] tabular-nums text-white/40">{formatTime(currentTime)}</span>
-        <input
-          type="range"
-          min={0}
-          max={duration || 0}
-          step="any"
-          value={currentTime}
-          aria-label="Posición de la pista"
-          aria-valuetext={`${formatTime(currentTime)} de ${formatTime(duration)}`}
-          onChange={(e) => {
-            if (audioRef.current) audioRef.current.currentTime = Number(e.target.value)
-          }}
-          className="ts-range min-w-0 flex-1"
-          style={{ "--fill": `${progress}%` } as CSSProperties}
-        />
-        <span className="font-mono text-[10px] tabular-nums text-white/40">{formatTime(duration)}</span>
-
-        <button
-          type="button"
-          onClick={() => setMuted((m) => !m)}
-          aria-label={muted ? "Activar sonido" : "Silenciar"}
-          className={iconBtn}
-        >
-          {muted || volume === 0 ? (
-            <VolumeX className="h-3.5 w-3.5" strokeWidth={1.5} />
-          ) : (
-            <Volume2 className="h-3.5 w-3.5" strokeWidth={1.5} />
+        <div className="flex items-center gap-2 sm:gap-4">
+          {hasMultiple && (
+            <button type="button" onClick={() => changeTrack(-1)} aria-label="Pista anterior" className={iconBtn}>
+              <SkipBack className="h-3.5 w-3.5" strokeWidth={1.5} />
+            </button>
           )}
-        </button>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          value={muted ? 0 : volume}
-          aria-label="Volumen"
-          onChange={(e) => {
-            setVolume(Number(e.target.value))
-            setMuted(false)
-          }}
-          className="ts-range hidden w-16 sm:block"
-          style={{ "--fill": `${muted ? 0 : volume}%` } as CSSProperties}
-        />
+
+          <button
+            type="button"
+            onClick={togglePlay}
+            aria-label={isPlaying ? "Pausar" : "Reproducir"}
+            className="flex h-10 w-10 flex-shrink-0 cursor-pointer items-center justify-center border border-[#FFD600] bg-[#FFD600] text-black transition-colors duration-200 hover:bg-transparent hover:text-[#FFD600] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FFD600] focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+          >
+            {isPlaying ? (
+              <Pause className="h-4 w-4" strokeWidth={2} fill="currentColor" />
+            ) : (
+              <Play className="ml-0.5 h-4 w-4" strokeWidth={2} fill="currentColor" />
+            )}
+          </button>
+
+          {hasMultiple && (
+            <button type="button" onClick={() => changeTrack(1)} aria-label="Siguiente pista" className={iconBtn}>
+              <SkipForward className="h-3.5 w-3.5" strokeWidth={1.5} />
+            </button>
+          )}
+
+          <p className="hidden min-w-0 max-w-[22rem] truncate text-xs uppercase tracking-[0.15em] text-white md:block" title={`${track.title} — ${track.artist}`}>
+            {track.title}
+            <span className="text-white/60"> · {track.artist}</span>
+          </p>
+
+          <span className="text-[11px] tabular-nums text-white/85">{formatTime(currentTime)}</span>
+          <input
+            type="range"
+            min={0}
+            max={duration || 0}
+            step="any"
+            value={currentTime}
+            aria-label="Posición de la pista"
+            aria-valuetext={`${formatTime(currentTime)} de ${formatTime(duration)}`}
+            onChange={(e) => {
+              if (audioRef.current) audioRef.current.currentTime = Number(e.target.value)
+            }}
+            className="ts-range min-w-0 flex-1"
+            style={{ "--fill": `${progress}%` } as CSSProperties}
+          />
+          <span className="text-[11px] tabular-nums text-white/85">{formatTime(duration)}</span>
+
+          <button
+            type="button"
+            onClick={() => setMuted((m) => !m)}
+            aria-label={muted ? "Activar sonido" : "Silenciar"}
+            className={iconBtn}
+          >
+            {muted || volume === 0 ? (
+              <VolumeX className="h-3.5 w-3.5" strokeWidth={1.5} />
+            ) : (
+              <Volume2 className="h-3.5 w-3.5" strokeWidth={1.5} />
+            )}
+          </button>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={muted ? 0 : volume}
+            aria-label="Volumen"
+            onChange={(e) => {
+              setVolume(Number(e.target.value))
+              setMuted(false)
+            }}
+            className="ts-range hidden w-16 sm:block"
+            style={{ "--fill": `${muted ? 0 : volume}%` } as CSSProperties}
+          />
+        </div>
       </div>
     </div>
   )
