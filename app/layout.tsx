@@ -8,10 +8,10 @@ const _geist = Geist({ subsets: ["latin"] })
 const _geistMono = Geist_Mono({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "Tropical Sadness 革命 — Sitio en progreso",
+  title: "Tropical Sadness 革命",
   description:
     "Where sadness meets sunshine. Vaporwave art collective exploring nostalgia, music, and tropical aesthetics.",
-  generator: "v0.app",
+  generator: "Next.js",
 }
 
 export default function RootLayout({
