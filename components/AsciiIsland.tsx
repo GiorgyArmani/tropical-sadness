@@ -56,6 +56,26 @@ const SUNRISE = 6.3
 const SUNSET = 19.2
 const SAND_RAMP = " .,:;_=*"
 
+// Clima: ciclo propio según el reloj real (igual para todos los visitantes); ?clima=lluvia lo fija
+type Weather = { clouds: number; overcast: number; rain: number; storm: number; fog: number; wind: number }
+const WEATHERS: Record<string, Weather> = {
+  despejado: { clouds: 0, overcast: 0, rain: 0, storm: 0, fog: 0, wind: 0 },
+  nublado: { clouds: 0.7, overcast: 0.45, rain: 0, storm: 0, fog: 0.1, wind: 0.3 },
+  lluvia: { clouds: 0.9, overcast: 0.7, rain: 0.6, storm: 0, fog: 0.2, wind: 0.6 },
+  tormenta: { clouds: 1, overcast: 0.9, rain: 1, storm: 1, fog: 0.15, wind: 1 },
+  niebla: { clouds: 0.3, overcast: 0.55, rain: 0, storm: 0, fog: 1, wind: 0 },
+}
+// Peso de cada clima en el ciclo: lo más común es el cielo despejado
+const WEATHER_ODDS: [string, number][] = [
+  ["despejado", 4],
+  ["nublado", 2.5],
+  ["lluvia", 1.5],
+  ["tormenta", 1],
+  ["niebla", 1],
+]
+const WEATHER_SPAN = 240 // segundos que dura cada clima
+const WEATHER_FADE = 25 // segundos de transición al siguiente
+
 // Palmeras en coordenadas de mundo, relativas al radio de la isla.
 // x: derecha, z: hacia la cámara en la vista "Frente". lean: inclinación (x, z).
 const PALMS = [
@@ -152,6 +172,43 @@ const localHour = (forced: number | null) => {
   return d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600
 }
 
+const weatherOfSegment = (seg: number) => {
+  const total = WEATHER_ODDS.reduce((s, [, w]) => s + w, 0)
+  let pick = hash(seg, 7.3) * total
+  for (const [name, w] of WEATHER_ODDS) {
+    pick -= w
+    if (pick < 0) return WEATHERS[name]
+  }
+  return WEATHERS.despejado
+}
+
+const weatherNow = (forced: Weather | null): Weather => {
+  if (forced) return forced
+  const s = Date.now() / 1000
+  const seg = Math.floor(s / WEATHER_SPAN)
+  const cur = weatherOfSegment(seg)
+  const into = s - seg * WEATHER_SPAN
+  if (into >= WEATHER_FADE) return cur
+  const prev = weatherOfSegment(seg - 1)
+  let f = into / WEATHER_FADE
+  f = f * f * (3 - 2 * f)
+  const mix = (k: keyof Weather) => prev[k] + (cur[k] - prev[k]) * f
+  return {
+    clouds: mix("clouds"),
+    overcast: mix("overcast"),
+    rain: mix("rain"),
+    storm: mix("storm"),
+    fog: mix("fog"),
+    wind: mix("wind"),
+  }
+}
+
+// Lleva un color hacia un gris de su misma luminosidad (cielo encapotado)
+const toGray = (c: RGB, k: number): RGB => {
+  const m = (c[0] + c[1] + c[2]) / 3
+  return mixRGB(c, [m * 0.82, m * 0.87, m * 0.95], k)
+}
+
 const ramp = (chars: string, v: number) => chars[clamp(Math.floor(v * chars.length), 0, chars.length - 1)]
 
 // Carácter según la dirección del trazo (coordenadas de pantalla, y hacia abajo)
@@ -244,6 +301,8 @@ export default function AsciiIsland() {
     let angle = targetRef.current
     const horaParam = parseFloat(new URLSearchParams(window.location.search).get("hora") ?? "")
     const forcedHour = Number.isFinite(horaParam) ? ((horaParam % 24) + 24) % 24 : null
+    const climaParam = new URLSearchParams(window.location.search).get("clima") ?? ""
+    const forcedWeather = Object.hasOwn(WEATHERS, climaParam) ? WEATHERS[climaParam] : null
 
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2)
@@ -329,7 +388,28 @@ export default function AsciiIsland() {
 
       // --- Hora del día: sol, luna y luz ambiente ---
       const hour = localHour(forcedHour)
-      const sky = skyAt(hour)
+      // Clima actual y rayos: cada cuarto de segundo puede caer uno, y su destello se apaga en un segundo
+      const wea = weatherNow(forcedWeather)
+      const slot = Math.floor(t * 4)
+      let flash = 0
+      let boltSeed = -1
+      for (let k = 0; k < 4; k++) {
+        if (wea.storm > 0.3 && hash(slot - k, 3.1) > 1 - 0.03 * wea.storm) {
+          flash = Math.max(flash, 1 - (t * 4 - (slot - k)) / 4)
+          if (k < 2 && boltSeed < 0) boltSeed = slot - k
+        }
+      }
+      const base = skyAt(hour)
+      const flashCol: RGB = [225, 232, 255]
+      const sky = {
+        ...base,
+        top: mixRGB(toGray(base.top, wea.overcast), flashCol, flash * 0.55),
+        hor: mixRGB(toGray(base.hor, wea.overcast), flashCol, flash * 0.6),
+        cloud: mixRGB(toGray(mixRGB(base.cloud, base.top, wea.overcast * 0.45), wea.overcast), flashCol, flash * 0.7),
+        rays: base.rays * (1 - wea.clouds * 0.85),
+        light: clamp(base.light * (1 - wea.overcast * 0.3) + flash * 0.5, 0, 1),
+        stars: base.stars * (1 - wea.clouds),
+      }
       const L = 0.35 + 0.65 * sky.light
       const night = clamp((0.75 - sky.light) / 0.4, 0, 1) // 0 de día, 1 de noche cerrada
       const dayK = clamp((sky.light - 0.6) / 0.4, 0, 1) // 1 a pleno sol
@@ -347,7 +427,7 @@ export default function AsciiIsland() {
       const sandMid = mixRGB([255, 194, 58], sandTint, sandMix)
       const sandLo = mixRGB([255, 138, 60], sandTint, sandMix)
       // De noche el mar se calma: menos crestas
-      const crestThr = 0.3 + night * 0.25 - dayK * 0.18
+      const crestThr = 0.3 + night * 0.25 - dayK * 0.18 - wea.wind * 0.15
       const bodyRad = R * 0.11
       const arc = (frac: number): [number, number] => [
         cx - W * 0.15 + (frac * 2 - 1) * W * 0.4,
@@ -364,7 +444,9 @@ export default function AsciiIsland() {
       // Los rayos salen del astro visible
       const ox = sunUp ? sunX : moonX
       const oy = sunUp ? sunY : moonY
-      const reflX = sunUp ? sunX : moonUp ? moonX : -9999
+      // Con el cielo cubierto no se ven el sol ni la luna
+      const bodyVis = wea.clouds < 0.85
+      const reflX = !bodyVis ? -9999 : sunUp ? sunX : moonUp ? moonX : -9999
       const reflCol = sunUp ? sunCol : moonCol
 
       // --- Fondo: cielo, arena, espuma y mar, celda por celda ---
@@ -435,11 +517,12 @@ export default function AsciiIsland() {
             const vy = y / shoreY
             const sunD = sunUp ? Math.hypot(x - sunX, y - sunY) : Infinity
             const moonD = moonUp ? Math.hypot(x - moonX, y - moonY) : Infinity
-            if (sunD < bodyRad) {
+            if (bodyVis && sunD < bodyRad) {
               const e = sunD / bodyRad
               ch = e < 0.45 ? "@" : e < 0.8 ? "#" : "O"
               col = rgb(sunCol, 1.05 - e * 0.25)
             } else if (
+              bodyVis &&
               moonD < bodyRad * 0.75 &&
               Math.hypot(x - moonX - bodyRad * 0.4, y - moonY + bodyRad * 0.15) > bodyRad * 0.62
             ) {
@@ -454,7 +537,7 @@ export default function AsciiIsland() {
               )
               const halo = Math.max(0, 1 - Math.min(sunD, moonD * 1.6) / (bodyRad * 3.2))
               const cloud = fbm((x + spin * 0.3) * 0.0035 + t * 0.025, y * 0.009 - t * 0.008)
-              const cloudAmt = Math.max(0, cloud - 0.45)
+              const cloudAmt = Math.max(0, cloud - (0.45 - wea.clouds * 0.25))
               const intensity =
                 ray * 0.95 * sky.rays * (0.25 + vy * 0.75) + cloudAmt * 1.3 + halo * 0.7 + Math.pow(vy, 2.2) * 0.4 * sky.light
               const v = intensity + (h - 0.5) * 0.35
@@ -489,7 +572,7 @@ export default function AsciiIsland() {
       }
 
       // --- Objetos 3D, dibujados de atrás hacia adelante ---
-      const wind = Math.sin(t * 0.7) * 0.07 + Math.sin(t * 1.9) * 0.025
+      const wind = (Math.sin(t * 0.7) * 0.07 + Math.sin(t * 1.9) * 0.025) * (1 + wea.wind * 2.5)
 
       const step = cw * 0.85
 
@@ -676,6 +759,65 @@ export default function AsciiIsland() {
       items.push({ depth: project(TV_POS.x * R, 0, TV_POS.z * R)[2], draw: drawTV })
       items.sort((a, b) => a.depth - b.depth).forEach((item) => item.draw())
 
+      // --- Clima delante de la escena: niebla, rayo y lluvia ---
+      if (wea.fog > 0.02) {
+        // Bancos de niebla que se arrastran, más densos junto al horizonte
+        const fogCol = mixRGB([205, 210, 222], sky.hor, 0.35)
+        for (let r = 0; r < rows; r++) {
+          const y = r * lh + lh / 2
+          const band = Math.exp(-Math.pow((y - shoreY) / (H * 0.3), 2))
+          if (band < 0.05) continue
+          for (let c = 0; c < cols; c++) {
+            const d = wea.fog * band * (0.45 + fbm((c * cw + spin * 0.5) * 0.005 + t * 0.06, y * 0.018))
+            if (d < 0.25 || hash(c, r + 50) > d) continue
+            const i = r * cols + c
+            chars[i] = d > 0.75 ? "=" : d > 0.5 ? "-" : d > 0.4 ? ":" : "."
+            colors[i] = rgb(fogCol, (0.5 + d * 0.5) * Math.max(L, 0.6))
+          }
+        }
+      }
+
+      if (boltSeed >= 0) {
+        // Rayo en zigzag desde arriba hasta la isla o el horizonte, con alguna rama
+        let x = W * (0.1 + hash(boltSeed, 9.2) * 0.8)
+        for (let y = lh * 0.5; y < shoreY; y += lh) {
+          const c = Math.floor(x / cw)
+          if (c >= 0 && c < cols && y > tops[c]) break
+          const dx = (hash(boltSeed, y) - 0.5) * cw * 3
+          plot(x, y, dx > cw * 0.4 ? "\\" : dx < -cw * 0.4 ? "/" : "|", rgb([240, 244, 255]))
+          if (hash(boltSeed + 1, y) > 0.9) {
+            const dir = dx > 0 ? -1 : 1
+            for (let b = 1; b <= 3; b++) plot(x + dir * b * cw, y + b * lh, dir > 0 ? "\\" : "/", rgb([190, 200, 255]))
+          }
+          x += dx
+        }
+      }
+
+      if (wea.rain > 0.02) {
+        // Gotas inclinadas por el viento con estela; al llegar al mar dejan una salpicadura
+        const drops = Math.floor(cols * rows * 0.035 * wea.rain)
+        const slant = 0.15 + wea.wind * 0.35
+        const rainCol = mixRGB([205, 220, 250], sky.hor, 0.15)
+        const bright = 0.7 + 0.3 * sky.light
+        const travel = W + H * slant
+        const trail = 2 + Math.round(wea.rain * 2)
+        const ch = slant > 0.3 ? "\\" : "|"
+        for (let k = 0; k < drops; k++) {
+          const speed = H * (0.9 + wea.rain * 0.6) * (0.8 + hash(k, 2) * 0.4)
+          const y = (hash(k, 1) * (H + lh * 6) + t * speed) % (H + lh * 6)
+          const land = shoreY + lh + hash(k, 4) * (H - shoreY)
+          const x = hash(k, 3) * travel - H * slant + y * slant
+          if (y > land) {
+            if (y - land < lh * 1.5) plot(x, land, hash(k, 5) > 0.5 ? "o" : ".", rgb(rainCol, bright))
+            continue
+          }
+          const b = bright * (0.75 + hash(k, 6) * 0.25)
+          for (let j = 0; j < trail; j++) {
+            plot(x - slant * lh * j, y - lh * j, j === 0 ? ch : j === trail - 1 ? "'" : ch, rgb(rainCol, b * (1 - j / trail) * 0.9 + 0.1))
+          }
+        }
+      }
+
       // --- Render: una llamada a fillText por tramo del mismo color ---
       ctx.clearRect(0, 0, W, H)
       for (let r = 0; r < rows; r++) {
@@ -723,11 +865,13 @@ export default function AsciiIsland() {
         ctx.closePath()
         ctx.fill()
         const s = clamp(shoreY / H, 0, 1)
+        // La niebla aclara y agrisa el fondo
+        const fogTint = (c: RGB) => mixRGB(c, [195, 200, 212], wea.fog * 0.5)
         const bg = ctx.createLinearGradient(0, 0, 0, H)
-        bg.addColorStop(0, rgb(sky.top, 0.42 * bgK))
-        bg.addColorStop(s, rgb(sky.hor, 0.5 * bgK))
-        bg.addColorStop(Math.min(s + 0.001, 1), rgb(seaFar, 0.5 * bgK))
-        bg.addColorStop(1, rgb(seaNear, 0.4 * bgK))
+        bg.addColorStop(0, rgb(fogTint(sky.top), 0.42 * bgK))
+        bg.addColorStop(s, rgb(fogTint(sky.hor), 0.5 * bgK))
+        bg.addColorStop(Math.min(s + 0.001, 1), rgb(fogTint(seaFar), 0.5 * bgK))
+        bg.addColorStop(1, rgb(fogTint(seaNear), 0.4 * bgK))
         ctx.fillStyle = bg
         ctx.fillRect(0, 0, W, H)
         ctx.globalCompositeOperation = "source-over"
