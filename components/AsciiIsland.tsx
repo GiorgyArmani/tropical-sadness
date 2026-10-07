@@ -13,8 +13,6 @@ const VIEWS = ["Frente", "Derecha", "Atrás", "Izquierda"]
 
 // Cada paleta va de tenue a brillante (4 niveles)
 const SKY_LAV = ["#2e2148", "#5a4290", "#9c7cf0", "#d6c4ff"]
-const LEAF = ["#0c3d19", "#1c8c36", "#39ff5a", "#b6ff9a"]
-const TRUNK = ["#4f2407", "#9a4a0e", "#ff8a1f", "#ffbb66"]
 const TV = ["#5a2a0c", "#b8561a", "#ff9a3c", "#ffd09a"]
 const SCREEN = ["#0b3a20", "#1e9a4c", "#5cff8a", "#e6fff0"]
 
@@ -492,24 +490,36 @@ export default function AsciiIsland() {
 
       // --- Objetos 3D, dibujados de atrás hacia adelante ---
       const wind = Math.sin(t * 0.7) * 0.07 + Math.sin(t * 1.9) * 0.025
+
       const step = cw * 0.85
 
-      // Palmeras: de día suben un tono y marcan sus celdas para recortarlas contra el cielo
-      const dayPalm = bgK > 0.5
-      const leafLo = dayPalm ? LEAF[2] : LEAF[1]
-      const leafHi = dayPalm ? LEAF[3] : LEAF[2]
-      const leafTop = LEAF[3]
-      const trunkLo = dayPalm ? TRUNK[2] : TRUNK[1]
-      const trunkHi = dayPalm ? TRUNK[3] : TRUNK[2]
+      // Palmeras sombreadas: la forma la dan los trazos, la luz la dan el color y la densidad del carácter
+      const DENSE_RAMP = ":-=+*#%@"
+      const leafCol = (v: number): RGB =>
+        v < 0.5 ? mixRGB([20, 95, 40], [45, 200, 75], v * 2) : mixRGB([45, 200, 75], [215, 255, 170], (v - 0.5) * 2)
+      const trunkCol = (v: number): RGB =>
+        v < 0.5 ? mixRGB([95, 38, 8], [215, 105, 25], v * 2) : mixRGB([215, 105, 25], [255, 215, 150], (v - 0.5) * 2)
+      const pAmb = 0.75 + 0.25 * sky.light
+      // Lado desde el que llega la luz del astro: -1 izquierda, 1 derecha
+      const lightSide = sunUp ? Math.sign(sunX - cx) || -1 : moonUp ? Math.sign(moonX - cx) || -1 : -1
       shade.fill(0)
-      const pplot = (px: number, py: number, ch: string, color: string) => {
-        plot(px, py, ch, color)
+      let palmId = 0
+      let palmCells: number[] = []
+      const shadeCell = (px: number, py: number, ch: string, v: number, col: (v: number) => RGB) => {
         const c = Math.floor(px / cw)
         const r = Math.floor(py / lh)
-        if (c >= 0 && r >= 0 && c < cols && r < rows) shade[r * cols + c] = 1
+        if (c < 0 || r < 0 || c >= cols || r >= rows) return
+        const i = r * cols + c
+        const k = clamp(v, 0, 1)
+        chars[i] = ch || ramp(DENSE_RAMP, k)
+        colors[i] = rgb(col(k), pAmb)
+        if (shade[i] !== palmId) palmCells.push(i)
+        shade[i] = palmId
       }
 
       const drawPalm = (palm: (typeof PALMS)[number]) => {
+        palmId++
+        palmCells = []
         const wx = palm.x * R
         const wz = palm.z * R
         const ph = palm.h * R
@@ -519,17 +529,17 @@ export default function AsciiIsland() {
         const top: [number, number, number] = [wx + palm.lean[0] * ph + swayX, base[1] + ph, wz + palm.lean[1] * ph + swayZ]
         const ctrl: [number, number, number] = [wx + palm.lean[0] * ph * 0.15, base[1] + ph * 0.55, wz + palm.lean[1] * ph * 0.15]
 
-        // Tronco: curva cuadrática con anillos alternados
+        // Tronco: dos celdas de ancho, el lado que mira al astro denso y claro, el otro en sombra, con anillos
         const n = Math.ceil(ph / (lh * 0.5))
-        let prev = project(...base)
         for (let s = 0; s <= n; s++) {
           const u = s / n
           const p = [0, 1, 2].map((k) => (1 - u) * (1 - u) * base[k] + 2 * (1 - u) * u * ctrl[k] + u * u * top[k])
           const [px, py] = project(p[0], p[1], p[2])
-          const ring = Math.floor(py / lh) % 2 === 0
-          pplot(px, py, dirChar(px - prev[0], py - prev[1] || -1), ring ? trunkHi : trunkLo)
-          if (palm.h > 0.3 && u < 0.85) pplot(px + cw, py, ring ? ":" : "|", trunkLo)
-          prev = [px, py, 0]
+          const ring = Math.floor(py / lh) % 2 === 0 ? 0.15 : 0
+          const lit = lightSide > 0 ? px + cw * 0.5 : px - cw * 0.5
+          const dark = lightSide > 0 ? px - cw * 0.5 : px + cw * 0.5
+          shadeCell(lit, py, "", 0.85 - ring, trunkCol)
+          if (palm.h > 0.3 && u < 0.85) shadeCell(dark, py, "", 0.3 - ring, trunkCol)
         }
 
         // Copa: hojas en espina de pescado, ordenadas por profundidad
@@ -545,7 +555,8 @@ export default function AsciiIsland() {
 
         const [tsx, tsy, tdepth] = project(...top)
         for (const f of fronds) {
-          const front = f.tipDepth > tdepth
+          // Las hojas de atrás quedan en sombra
+          const facing = f.tipDepth > tdepth ? 0 : -0.3
           const samples = Math.ceil(f.len / step)
           let [lx0, ly0] = [tsx, tsy]
           for (let s = 1; s <= samples; s++) {
@@ -563,7 +574,7 @@ export default function AsciiIsland() {
             const nx = dx / mag
             const ny = dy / mag
 
-            // Foliolos a ambos lados, inclinados hacia la punta y caídos
+            // Foliolos a ambos lados: más claros los que miran al astro y hacia arriba
             if (u > 0.1 && s % 2 === 0) {
               const leaf = L * 0.2 * (1 - u * 0.8)
               for (const side of [-1, 1]) {
@@ -575,20 +586,34 @@ export default function AsciiIsland() {
                 lx /= lm
                 ly /= lm
                 const ch = dirChar(lx, ly)
+                const lambert = clamp(0.5 + 0.4 * lx * lightSide - 0.35 * ly, 0, 1)
                 const k = Math.max(1, Math.round(leaf / step))
                 for (let j = 1; j <= k; j++) {
-                  pplot(px + lx * j * step, py + ly * j * step, ch, j === k || !front ? leafLo : leafHi)
+                  const v = 0.2 + 0.75 * lambert * (1 - (j / k) * 0.35) + (1 - u) * 0.1 + facing
+                  shadeCell(px + lx * j * step, py + ly * j * step, ch, v, leafCol)
                 }
               }
             }
-            pplot(px, py, dirChar(dx, dy), front ? (u < 0.5 ? leafTop : leafHi) : leafHi)
+            // Nervio central: carácter denso que se aclara hacia la base
+            shadeCell(px, py, "", 0.55 + (1 - u) * 0.4 + facing, leafCol)
           }
         }
 
-        // Cocos
-        pplot(tsx - cw, tsy + lh * 0.6, "o", TRUNK[2])
-        pplot(tsx + cw, tsy + lh * 0.6, "o", TRUNK[1])
-        pplot(tsx, tsy, "@", TRUNK[3])
+        // Cocos, iluminados del lado del astro
+        for (const [ox, oy] of [[-1, 0.6], [1, 0.6], [0, 0]]) {
+          shadeCell(tsx + ox * cw, tsy + oy * lh, ox === 0 ? "@" : "o", 0.6 + 0.3 * ox * lightSide, trunkCol)
+        }
+
+        // Contorno vacío de una celda: separa la palmera del cielo, la arena y las palmeras de atrás
+        for (const i of palmCells) {
+          const c = i % cols
+          const around = [c > 0 ? i - 1 : -1, c < cols - 1 ? i + 1 : -1, i - cols, i + cols]
+          for (const j of around) {
+            if (j < 0 || j >= chars.length || shade[j] === palmId) continue
+            chars[j] = ""
+            shade[j] = 255
+          }
+        }
       }
 
       // Tele: se ven una o dos caras según el ángulo, cada una escalada por su orientación
@@ -651,24 +676,6 @@ export default function AsciiIsland() {
       items.push({ depth: project(TV_POS.x * R, 0, TV_POS.z * R)[2], draw: drawTV })
       items.sort((a, b) => a.depth - b.depth).forEach((item) => item.draw())
 
-      // De día, un margen de una celda alrededor de las palmeras sin caracteres de cielo
-      if (bgK > 0) {
-        for (let r = 0; r < rows; r++) {
-          for (let c = 0; c < cols; c++) {
-            const i = r * cols + c
-            if (shade[i] === 1) continue
-            const near =
-              (c > 0 && shade[i - 1] === 1) ||
-              (c < cols - 1 && shade[i + 1] === 1) ||
-              (r > 0 && shade[i - cols] === 1) ||
-              (r < rows - 1 && shade[i + cols] === 1)
-            if (!near) continue
-            shade[i] = 2
-            if (r * lh + lh / 2 < tops[c]) chars[i] = ""
-          }
-        }
-      }
-
       // --- Render: una llamada a fillText por tramo del mismo color ---
       ctx.clearRect(0, 0, W, H)
       for (let r = 0; r < rows; r++) {
@@ -708,21 +715,6 @@ export default function AsciiIsland() {
       // Fondo de día detrás de los caracteres (fuera del halo): cielo, isla y mar
       if (bgK > 0) {
         ctx.globalCompositeOperation = "destination-over"
-        // Silueta oscura detrás de las palmeras
-        ctx.globalAlpha = 0.7 * bgK
-        ctx.fillStyle = "rgb(4,26,14)"
-        for (let r = 0; r < rows; r++) {
-          let start = -1
-          for (let c = 0; c <= cols; c++) {
-            const on = c < cols && shade[r * cols + c] > 0
-            if (on && start < 0) start = c
-            else if (!on && start >= 0) {
-              ctx.fillRect(start * cw, r * lh, (c - start) * cw, lh)
-              start = -1
-            }
-          }
-        }
-        ctx.globalAlpha = 1
         ctx.fillStyle = rgb(mixRGB(sandHi, [255, 150, 70], 0.4), 0.26 * bgK)
         ctx.beginPath()
         ctx.moveTo(0, shoreY)
