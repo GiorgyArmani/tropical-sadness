@@ -14,14 +14,14 @@ export default function TropicalSadnessLanding() {
         <SocialLinks />
       </header>
 
-      <section className="relative z-10 flex justify-center px-4 pt-3 sm:pt-[6vh]">
+      <section className="relative z-10 flex justify-center px-4 pt-3 sm:pt-[4vh]">
         <h1 className="sr-only">Tropical Sadness</h1>
         <img
           src="/logo-trim.png"
           alt="Tropical Sadness 革命"
           width={634}
           height={701}
-          className="logo-float h-auto w-[min(46vw,210px)] select-none"
+          className="logo-float h-auto w-[min(30vw,135px)] select-none"
           draggable={false}
         />
       </section>

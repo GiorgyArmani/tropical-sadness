@@ -12,7 +12,6 @@ const TILT = 0.2 // cuánto se ve el "piso" de la isla desde arriba
 const VIEWS = ["Frente", "Derecha", "Atrás", "Izquierda"]
 
 // Cada paleta va de tenue a brillante (4 niveles)
-const SKY_LAV = ["#2e2148", "#5a4290", "#9c7cf0", "#d6c4ff"]
 const TV = ["#5a2a0c", "#b8561a", "#ff9a3c", "#ffd09a"]
 const SCREEN = ["#0b3a20", "#1e9a4c", "#5cff8a", "#e6fff0"]
 
@@ -56,7 +55,8 @@ const SUNRISE = 6.3
 const SUNSET = 19.2
 const SAND_RAMP = " .,:;_=*"
 
-// Clima: ciclo propio según el reloj real (igual para todos los visitantes); ?clima=lluvia lo fija
+// Clima: el real de la ubicación del visitante (/api/clima, Open-Meteo); si no está disponible, un ciclo
+// propio según el reloj real (igual para todos). ?clima=lluvia lo fija para previsualizar
 type Weather = { clouds: number; overcast: number; rain: number; storm: number; fog: number; wind: number }
 const WEATHERS: Record<string, Weather> = {
   despejado: { clouds: 0, overcast: 0, rain: 0, storm: 0, fog: 0, wind: 0 },
@@ -97,6 +97,7 @@ const TV_POS = { x: 0.07, z: 0.22, yaw: 0 }
 const TV_W = 13
 const TV_D = 8
 const TV_H = 7
+const TV_SCALE = 1.9 // la tele se dibuja más grande que su sprite para que llame la atención
 
 const hash = (x: number, y: number) => {
   const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453
@@ -182,17 +183,10 @@ const weatherOfSegment = (seg: number) => {
   return WEATHERS.despejado
 }
 
-const weatherNow = (forced: Weather | null): Weather => {
-  if (forced) return forced
-  const s = Date.now() / 1000
-  const seg = Math.floor(s / WEATHER_SPAN)
-  const cur = weatherOfSegment(seg)
-  const into = s - seg * WEATHER_SPAN
-  if (into >= WEATHER_FADE) return cur
-  const prev = weatherOfSegment(seg - 1)
-  let f = into / WEATHER_FADE
-  f = f * f * (3 - 2 * f)
-  const mix = (k: keyof Weather) => prev[k] + (cur[k] - prev[k]) * f
+// Mezcla suave entre dos climas (f de 0 a 1)
+const lerpWeather = (a: Weather, b: Weather, f: number): Weather => {
+  const s = f * f * (3 - 2 * f)
+  const mix = (k: keyof Weather) => a[k] + (b[k] - a[k]) * s
   return {
     clouds: mix("clouds"),
     overcast: mix("overcast"),
@@ -201,6 +195,25 @@ const weatherNow = (forced: Weather | null): Weather => {
     fog: mix("fog"),
     wind: mix("wind"),
   }
+}
+
+// Clima del ciclo propio en este momento, con transición entre segmentos
+const cycleWeather = (): Weather => {
+  const s = Date.now() / 1000
+  const seg = Math.floor(s / WEATHER_SPAN)
+  const cur = weatherOfSegment(seg)
+  const into = s - seg * WEATHER_SPAN
+  if (into >= WEATHER_FADE) return cur
+  return lerpWeather(weatherOfSegment(seg - 1), cur, into / WEATHER_FADE)
+}
+
+// Lleva la hora real a la hora "canónica" del cielo, para que el amanecer y el
+// atardecer reales caigan donde los espera SKY_KEYS (SUNRISE y SUNSET)
+const canonHour = (hour: number, sunrise: number, sunset: number) => {
+  if (hour >= sunrise && hour < sunset) return SUNRISE + ((hour - sunrise) / (sunset - sunrise)) * (SUNSET - SUNRISE)
+  const nightLen = 24 - (sunset - sunrise)
+  const into = (hour - sunset + 24) % 24
+  return (SUNSET + (into / nightLen) * (24 - (SUNSET - SUNRISE))) % 24
 }
 
 // Lleva un color hacia un gris de su misma luminosidad (cielo encapotado)
@@ -304,6 +317,37 @@ export default function AsciiIsland() {
     const climaParam = new URLSearchParams(window.location.search).get("clima") ?? ""
     const forcedWeather = Object.hasOwn(WEATHERS, climaParam) ? WEATHERS[climaParam] : null
 
+    // Clima real de la ubicación (Open-Meteo vía /api/clima). Mientras no llega, o si falla, manda el ciclo propio
+    let live: { from: Weather; to: Weather; at: number } | null = null
+    let sun: { sunrise: number; sunset: number } | null = null
+    let lastWea: Weather = forcedWeather ?? cycleWeather()
+    let cancelled = false
+    const isWeather = (w: unknown): w is Weather =>
+      !!w && (["clouds", "overcast", "rain", "storm", "fog", "wind"] as const).every((k) => typeof (w as Weather)[k] === "number")
+    // ?lat=..&lon=.. en la URL de la página fija la ubicación (útil en local, donde Vercel no la envía)
+    const pageParams = new URLSearchParams(window.location.search)
+    const coordsQuery =
+      pageParams.has("lat") && pageParams.has("lon")
+        ? `?lat=${encodeURIComponent(pageParams.get("lat")!)}&lon=${encodeURIComponent(pageParams.get("lon")!)}`
+        : ""
+    const fetchClima = async () => {
+      try {
+        const data = await (await fetch(`/api/clima${coordsQuery}`)).json()
+        if (cancelled || !data?.ok || !isWeather(data.weather)) return
+        live = { from: lastWea, to: data.weather, at: performance.now() }
+        if (typeof data.sunrise === "number" && typeof data.sunset === "number" && data.sunrise < data.sunset) {
+          sun = { sunrise: data.sunrise, sunset: data.sunset }
+        }
+      } catch {
+        // Sin conexión o sin ubicación: sigue el ciclo propio
+      }
+    }
+    let climaTimer: ReturnType<typeof setInterval> | undefined
+    if (!forcedWeather) {
+      fetchClima()
+      climaTimer = setInterval(fetchClima, 15 * 60 * 1000)
+    }
+
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2)
       W = canvas.clientWidth
@@ -387,9 +431,14 @@ export default function AsciiIsland() {
       }
 
       // --- Hora del día: sol, luna y luz ambiente ---
-      const hour = localHour(forcedHour)
+      // Con la salida y puesta del sol reales, el cielo sigue el día de la ubicación
+      const realHour = localHour(forcedHour)
+      const hour = sun && forcedHour === null ? canonHour(realHour, sun.sunrise, sun.sunset) : realHour
       // Clima actual y rayos: cada cuarto de segundo puede caer uno, y su destello se apaga en un segundo
-      const wea = weatherNow(forcedWeather)
+      const wea =
+        forcedWeather ??
+        (live ? lerpWeather(live.from, live.to, clamp((now - live.at) / (WEATHER_FADE * 1000), 0, 1)) : cycleWeather())
+      lastWea = wea
       const slot = Math.floor(t * 4)
       let flash = 0
       let boltSeed = -1
@@ -561,14 +610,128 @@ export default function AsciiIsland() {
         }
       }
 
-      // --- Pájaros cruzando el cielo ---
-      for (let b = 0; b < (sky.light > 0.6 ? 3 : 0); b++) {
-        const speed = 18 + b * 7
-        const bx = ((t * speed + b * 420) % (W + 200)) - 100
-        const by = H * (0.16 + b * 0.07) + Math.sin(t * 0.8 + b) * lh * 1.5
-        const flap = Math.sin(t * 7 + b * 2) > 0
-        plot(bx, by, flap ? "v" : "^", SKY_LAV[3])
-        if (b === 1) plot(bx + cw * 3, by + lh, flap ? "^" : "v", SKY_LAV[2])
+      // --- Vida: peces en el mar, aves y avioneta en el cielo ---
+      // Con lluvia o tormenta la vida se esconde
+      const calm = clamp(1 - Math.max(wea.rain, wea.storm) * 1.4, 0, 1)
+      const seaTop = shoreY + lh * 2.5
+
+      // Cardúmenes bajo la superficie: sombras tenues de día, bioluminiscencia de noche
+      const glowFish = night > 0.5
+      const fishShadow = mixRGB(seaNear, [0, 8, 22], 0.8)
+      for (let s = 0; s < 3; s++) {
+        const dir = s % 2 ? -1 : 1
+        const span = W + 300
+        const run = (t * (9 + s * 5) + s * 700) % span
+        const sx = dir > 0 ? run - 150 : span - run - 150
+        const sy = seaTop + (H - seaTop) * (0.2 + s * 0.25) + Math.sin(t * 0.5 + s) * lh
+        const body = dir > 0 ? "><>" : "<><"
+        for (let f = 0; f < 6; f++) {
+          const fx = sx + (hash(s, f) - 0.5) * cw * 20 + Math.sin(t * 2 + f) * cw * 0.6
+          const fy = sy + (hash(f, s) - 0.5) * lh * 3
+          if (glowFish) {
+            const pulse = 0.5 + 0.5 * Math.sin(t * 3 + f * 1.7)
+            for (let j = 0; j < 3; j++) plot(fx + (j - 1) * cw, fy, body[j], rgb([90, 255, 225], 0.45 + pulse * 0.5))
+            if (pulse > 0.6) plot(fx - dir * cw * (2 + (f % 2)), fy, ".", rgb([60, 200, 255], 0.5))
+          } else {
+            for (let j = 0; j < 3; j++) plot(fx + (j - 1) * cw, fy, body[j], rgb(fishShadow))
+          }
+        }
+      }
+
+      // Peces que saltan en arco: salpicadura al salir y al entrar, y ondas que se abren
+      const fishCol: RGB = night > 0.5 ? [170, 195, 255] : [240, 245, 255]
+      const jumpSlot = Math.floor(t / 2.5)
+      for (let k = jumpSlot - 1; k <= jumpSlot; k++) {
+        if (hash(k, 11) > 0.6 * calm + 0.1) continue
+        const p = (t - (k * 2.5 + hash(k, 12) * 1.2)) / 1.1
+        if (p < 0 || p > 2) continue
+        const dir = hash(k, 15) > 0.5 ? 1 : -1
+        const x0 = W * (0.05 + hash(k, 13) * 0.9)
+        const y0 = seaTop + (H - seaTop) * hash(k, 14) * 0.75
+        const width = cw * (6 + hash(k, 16) * 6)
+        const xl = x0 + dir * width
+        if (p <= 1) {
+          const fx = x0 + dir * width * p
+          const fy = y0 - 4 * p * (1 - p) * lh * (2 + hash(k, 17) * 2)
+          const body = dir > 0 ? "><>" : "<><"
+          for (let j = 0; j < 3; j++) plot(fx + (j - 1) * cw, fy, body[j], rgb(fishCol, L))
+          if (p < 0.3) {
+            plot(x0, y0, "o", rgb(fishCol, 0.8 * L))
+            plot(x0 - cw, y0, "'", rgb(fishCol, 0.6 * L))
+            plot(x0 + cw, y0, "'", rgb(fishCol, 0.6 * L))
+          }
+          if (p > 0.8) plot(xl, y0, "o", rgb(fishCol, 0.8 * L))
+        } else {
+          const r = (p - 1) * cw * 5
+          const fade = (2 - p) * 0.7 * L
+          plot(xl - r, y0, "(", rgb(fishCol, fade))
+          plot(xl + r, y0, ")", rgb(fishCol, fade))
+        }
+      }
+
+      // Aves: siluetas oscuras contra el cielo, solo con luz y sin lluvia
+      if (sky.light > 0.45 && calm > 0.4) {
+        const birdCol = rgb(mixRGB(sky.top, [18, 22, 38], 0.75))
+        // Bandadas en V cruzando a distinta altura y velocidad
+        for (let fl = 0; fl < 2; fl++) {
+          const dir = fl ? -1 : 1
+          const span = W + 700
+          const run = (t * (26 + fl * 9) + fl * 900) % span
+          const lx = dir > 0 ? run - 350 : span - run - 350
+          const ly = H * (0.12 + fl * 0.1) + Math.sin(t * 0.4 + fl) * lh
+          const half = 2 + fl
+          for (let j = -half; j <= half; j++) {
+            const bx = lx - dir * Math.abs(j) * cw * 2.6
+            const by = ly + j * lh * 0.55 + Math.abs(j) * lh * 0.35
+            plot(bx, by, Math.sin(t * 6 + j * 1.3 + fl) > 0 ? "v" : "-", birdCol)
+          }
+        }
+        // Una fragata planeando en círculos, alto sobre la isla
+        const fa = t * 0.22
+        const fx = cx + W * 0.18 + Math.cos(fa) * W * 0.06
+        const fy = H * 0.14 + Math.sin(fa) * lh * 2.5
+        const wings = Math.sin(t * 0.9) > 0.85 ? ["\\", "v", "/"] : ["-", "v", "-"]
+        for (let j = 0; j < 3; j++) plot(fx + (j - 1) * cw, fy, wings[j], birdCol)
+      }
+
+      // Avioneta: pasa de vez en cuando, a veces con un cartel; de noche se ven sus luces
+      const planeSlot = Math.floor(t / 70)
+      if (hash(planeSlot, 21) < 0.85 * (1 - wea.storm) * (1 - wea.fog * 0.7) * (1 - wea.rain * 0.5)) {
+        const dir = hash(planeSlot, 24) > 0.5 ? 1 : -1
+        const elapsed = t - planeSlot * 70 - 4
+        const banner = hash(planeSlot, 23) > 0.45 ? "[ TROPICAL SADNESS ]" : ""
+        const tail = banner.length + 4
+        const nose = dir > 0 ? -cw * 8 + elapsed * 55 : W + cw * 8 - elapsed * 55
+        if (elapsed > 0 && nose > -cw * (tail + 8) && nose < W + cw * (tail + 8)) {
+          const py = H * (0.07 + hash(planeSlot, 22) * 0.12) + Math.sin(t * 0.6) * lh * 0.3
+          const dark = night > 0.5
+          const bodyCol = rgb(dark ? [70, 72, 96] : [238, 238, 244], dark ? 1 : L)
+          const prop = ["|", "/", "-", "\\"][Math.floor(t * 20) % 4]
+          const top = dir > 0 ? " _|\\_" : "_/|_ "
+          const body = dir > 0 ? `=-==O${prop}` : `${prop}O==-=`
+          // El sprite se dibuja desde la cola hacia la nariz
+          const x0 = dir > 0 ? nose - (body.length - 1) * cw : nose
+          for (let j = 0; j < body.length; j++) plot(x0 + j * cw, py, body[j], bodyCol)
+          for (let j = 0; j < top.length; j++) if (top[j] !== " ") plot(x0 + j * cw, py - lh, top[j], bodyCol)
+          if (dark) {
+            const blink = Math.sin(t * 6) > 0.3
+            if (blink) plot(x0 + (dir > 0 ? 0 : body.length - 1) * cw, py, "*", rgb([255, 255, 255]))
+            plot(x0 + 2 * cw, py - lh, ".", rgb(dir > 0 ? [255, 70, 70] : [90, 255, 120]))
+            plot(x0 + 3 * cw, py - lh, ".", rgb(dir > 0 ? [90, 255, 120] : [255, 70, 70]))
+          }
+          if (banner) {
+            // Cuerda y cartel ondeando detrás de la cola
+            const rope = dir > 0 ? x0 - cw : x0 + body.length * cw
+            for (let j = 0; j < 3; j++) plot(rope - dir * j * cw, py, "~", rgb([150, 150, 160], dark ? 0.5 : L))
+            const start = rope - dir * 3 * cw
+            for (let j = 0; j < banner.length; j++) {
+              const ch = banner[dir > 0 ? banner.length - 1 - j : j]
+              if (ch === " ") continue
+              const wave = Math.sin(t * 4 - j * 0.45) * lh * 0.45
+              plot(start - dir * j * cw, py + wave, ch, rgb([255, 214, 0], dark ? 0.45 : 1))
+            }
+          }
+        }
       }
 
       // --- Objetos 3D, dibujados de atrás hacia adelante ---
@@ -699,8 +862,16 @@ export default function AsciiIsland() {
         }
       }
 
-      // Tele: se ven una o dos caras según el ángulo, cada una escalada por su orientación
+      // Tele: se ven una o dos caras según el ángulo, cada una escalada por su orientación.
+      // Guarda sus celdas para redibujarla por encima del clima.
+      let tvCells: { i: number; ch: string; col: string }[] = []
       const drawTV = () => {
+        tvCells = []
+        const tvSet = (c: number, r: number, ch: string, col: string) => {
+          if (c < 0 || r < 0 || c >= cols || r >= rows) return
+          setCell(c, r, ch, col)
+          tvCells.push({ i: r * cols + c, ch, col })
+        }
         const wx = TV_POS.x * R
         const wz = TV_POS.z * R
         const [sx, sy] = project(wx, ground(wx, wz), wz)
@@ -709,8 +880,9 @@ export default function AsciiIsland() {
         const sa = Math.sin(a)
         type Face = { width: number; src: number; normalX: number; fn: (c: number, r: number) => Cell }
         const faces: Face[] = []
-        const fw = Math.round(TV_W * Math.abs(ca))
-        const sw = Math.round(TV_D * Math.abs(sa))
+        const fw = Math.round(TV_W * TV_SCALE * Math.abs(ca))
+        const sw = Math.round(TV_D * TV_SCALE * Math.abs(sa))
+        const dh = Math.round(TV_H * TV_SCALE)
         if (fw > 0) {
           faces.push(
             ca > 0
@@ -725,30 +897,46 @@ export default function AsciiIsland() {
 
         const total = faces.reduce((s, f) => s + f.width, 0)
         let col0 = Math.round(sx / cw - total / 2)
-        const row0 = Math.floor((sy + lh * 0.6) / lh) - TV_H
+        const left = col0
+        const row0 = Math.floor((sy + lh * 0.6) / lh) - dh
         const mid = col0 + Math.floor(total / 2)
-        setCell(mid - 2, row0 - 2, "\\", TV[1])
-        setCell(mid + 2, row0 - 2, "/", TV[1])
-        setCell(mid - 1, row0 - 1, "\\", TV[2])
-        setCell(mid + 1, row0 - 1, "/", TV[2])
-        setCell(mid, row0 - 1, "o", TV[3])
+        // Antenas
+        tvSet(mid - 3, row0 - 3, "\\", TV[1])
+        tvSet(mid + 3, row0 - 3, "/", TV[1])
+        tvSet(mid - 2, row0 - 2, "\\", TV[1])
+        tvSet(mid + 2, row0 - 2, "/", TV[1])
+        tvSet(mid - 1, row0 - 1, "\\", TV[2])
+        tvSet(mid + 1, row0 - 1, "/", TV[2])
+        tvSet(mid, row0 - 1, "o", TV[3])
 
         for (const face of faces) {
           for (let c = 0; c < face.width; c++) {
             const srcC = Math.min(face.src - 1, Math.floor(((c + 0.5) / face.width) * face.src))
-            for (let r = 0; r < TV_H; r++) {
+            for (let r = 0; r < dh; r++) {
+              const srcR = Math.min(TV_H - 1, Math.floor(((r + 0.5) / dh) * TV_H))
               const edgeT = r === 0
-              const edgeB = r === TV_H - 1
+              const edgeB = r === dh - 1
               const edgeL = c === 0
               const edgeR = c === face.width - 1
               let cell: Cell
               if (edgeT || edgeB) cell = [edgeL || edgeR ? (edgeT ? "." : "'") : edgeT ? "-" : "=", TV[2]]
               else if (edgeL || edgeR) cell = ["|", TV[2]]
-              else cell = face.fn(srcC, r)
-              setCell(col0 + c, row0 + r, cell[0], cell[1])
+              else cell = face.fn(srcC, srcR)
+              tvSet(col0 + c, row0 + r, cell[0], cell[1])
             }
           }
           col0 += face.width
+        }
+
+        // Contorno vacío alrededor de la caja para que resalte sobre la arena
+        const own = new Set(tvCells.map((cell) => cell.i))
+        for (let r = row0 - 1; r <= row0 + dh; r++) {
+          for (let c = left - 1; c <= left + total; c++) {
+            const border = r === row0 - 1 || r === row0 + dh || c === left - 1 || c === left + total
+            if (!border || c < 0 || r < 0 || c >= cols || r >= rows) continue
+            const i = r * cols + c
+            if (!own.has(i)) chars[i] = ""
+          }
         }
       }
 
@@ -758,6 +946,17 @@ export default function AsciiIsland() {
       }))
       items.push({ depth: project(TV_POS.x * R, 0, TV_POS.z * R)[2], draw: drawTV })
       items.sort((a, b) => a.depth - b.depth).forEach((item) => item.draw())
+      // Celdas de la tele que no tapó ninguna palmera de adelante
+      const tvVisible = tvCells.filter((cell) => chars[cell.i] === cell.ch && colors[cell.i] === cell.col)
+
+      // --- Luciérnagas: de noche flotan entre las palmeras ---
+      const fireflies = Math.round(70 * night * calm)
+      for (let i = 0; i < fireflies; i++) {
+        const fx = cx + (hash(i, 31) - 0.5) * Rx * 1.5 + Math.sin(t * 0.3 + i) * cw * 3
+        const fy = shoreY - hash(i, 32) * R * 0.55 + Math.sin(t * 0.5 + i * 1.7) * lh * 1.5
+        const blink = Math.sin(t * (1 + hash(i, 33) * 2) + i * 5)
+        if (blink > 0.1) plot(fx, fy, blink > 0.7 ? "*" : blink > 0.4 ? "+" : ".", rgb([225, 255, 130], 0.55 + blink * 0.5))
+      }
 
       // --- Clima delante de la escena: niebla, rayo y lluvia ---
       if (wea.fog > 0.02) {
@@ -816,6 +1015,12 @@ export default function AsciiIsland() {
             plot(x - slant * lh * j, y - lh * j, j === 0 ? ch : j === trail - 1 ? "'" : ch, rgb(rainCol, b * (1 - j / trail) * 0.9 + 0.1))
           }
         }
+      }
+
+      // La tele queda siempre visible por encima de la lluvia y la niebla
+      for (const cell of tvVisible) {
+        chars[cell.i] = cell.ch
+        colors[cell.i] = cell.col
       }
 
       // --- Render: una llamada a fillText por tramo del mismo color ---
@@ -893,6 +1098,8 @@ export default function AsciiIsland() {
 
     return () => {
       cancelAnimationFrame(frame)
+      cancelled = true
+      clearInterval(climaTimer)
       window.removeEventListener("resize", resize)
     }
   }, [])
