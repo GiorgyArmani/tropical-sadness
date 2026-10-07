@@ -240,6 +240,7 @@ export default function AsciiIsland() {
     let chars: string[] = []
     let colors: string[] = []
     let tops: number[] = []
+    let shade = new Uint8Array(0) // 1 = celda de palmera, 2 = margen alrededor
     let frame = 0
     let last = -Infinity
     let angle = targetRef.current
@@ -266,6 +267,7 @@ export default function AsciiIsland() {
       chars = new Array(cols * rows)
       colors = new Array(cols * rows)
       tops = new Array(cols)
+      shade = new Uint8Array(cols * rows)
     }
 
     const plot = (px: number, py: number, ch: string, color: string) => {
@@ -333,9 +335,10 @@ export default function AsciiIsland() {
       const L = 0.35 + 0.65 * sky.light
       const night = clamp((0.75 - sky.light) / 0.4, 0, 1) // 0 de día, 1 de noche cerrada
       const dayK = clamp((sky.light - 0.6) / 0.4, 0, 1) // 1 a pleno sol
+      const bgK = clamp((sky.light - 0.45) / 0.55, 0, 1) // fondo claro: 0 de noche, 1 a pleno sol
 
       // El entorno toma su color del cielo: el mar lo refleja y la arena recibe su luz
-      const waterTint = mixRGB([16, 30, 92], [20, 200, 215], dayK)
+      const waterTint = mixRGB([16, 30, 92], [70, 215, 240], dayK)
       const seaFar = mixRGB(sky.hor, waterTint, 0.35) // junto al horizonte refleja el horizonte
       const seaNear = mixRGB(sky.top, waterTint, 0.6) // más cerca, el agua profunda
       const seaCrest = mixRGB(sky.cloud, [255, 255, 255], 0.35)
@@ -407,13 +410,13 @@ export default function AsciiIsland() {
               ch = wave > 0.8 ? "~" : h > 0.6 ? "=" : "-"
               let c3 = mixRGB(seaFar, seaNear, clamp(d * 1.4, 0, 1))
               if (glint > 0.6) c3 = mixRGB(c3, seaCrest, clamp((glint - 0.6) * 3, 0, 0.7))
-              col = rgb(c3, (0.5 + (wave - crestThr) * 0.9 + h * 0.15) * (0.65 + 0.35 * sky.light))
+              col = rgb(c3, (0.5 + (wave - crestThr) * 0.9 + h * 0.15) * (0.65 + 0.35 * sky.light + dayK * 0.3))
             } else if (wave > -0.1 && h > 0.5 + night * 0.2) {
               ch = h > 0.85 ? "~" : "-"
-              col = rgb(mixRGB(seaFar, seaNear, clamp(d * 1.4, 0, 1)), (0.35 + d * 0.15) * (0.65 + 0.35 * sky.light))
+              col = rgb(mixRGB(seaFar, seaNear, clamp(d * 1.4, 0, 1)), (0.35 + d * 0.15) * (0.65 + 0.35 * sky.light + dayK * 0.3))
             } else if (h > 0.93) {
               ch = "."
-              col = rgb(seaNear, 0.3 * L)
+              col = rgb(seaNear, (0.3 + dayK * 0.2) * L)
             }
           } else if (y >= top) {
             // Arena: textura de dunas iluminada desde arriba a la izquierda
@@ -462,7 +465,7 @@ export default function AsciiIsland() {
                 let c3 = mixRGB(sky.top, sky.hor, Math.pow(clamp(vy, 0, 1), 1.6))
                 c3 = mixRGB(c3, sky.cloud, clamp(cloudAmt * 3.5, 0, 1))
                 c3 = mixRGB(c3, sunUp ? sunCol : sky.ray, clamp(ray * sky.rays * 0.5 + halo, 0, 1))
-                col = rgb(c3, 0.45 + dayK * 0.25 + clamp(v, 0, 1) * 0.75)
+                col = rgb(c3, 0.45 + dayK * 0.4 + clamp(v, 0, 1) * 0.75)
               } else if (sky.stars > 0 && vy < 0.85 && hash(c * 3.1, r * 1.7) > 1 - 0.025 * sky.stars) {
                 // Estrellas que titilan
                 const tw = Math.sin(t * (1.5 + h * 3) + h * 40)
@@ -491,6 +494,21 @@ export default function AsciiIsland() {
       const wind = Math.sin(t * 0.7) * 0.07 + Math.sin(t * 1.9) * 0.025
       const step = cw * 0.85
 
+      // Palmeras: de día suben un tono y marcan sus celdas para recortarlas contra el cielo
+      const dayPalm = bgK > 0.5
+      const leafLo = dayPalm ? LEAF[2] : LEAF[1]
+      const leafHi = dayPalm ? LEAF[3] : LEAF[2]
+      const leafTop = LEAF[3]
+      const trunkLo = dayPalm ? TRUNK[2] : TRUNK[1]
+      const trunkHi = dayPalm ? TRUNK[3] : TRUNK[2]
+      shade.fill(0)
+      const pplot = (px: number, py: number, ch: string, color: string) => {
+        plot(px, py, ch, color)
+        const c = Math.floor(px / cw)
+        const r = Math.floor(py / lh)
+        if (c >= 0 && r >= 0 && c < cols && r < rows) shade[r * cols + c] = 1
+      }
+
       const drawPalm = (palm: (typeof PALMS)[number]) => {
         const wx = palm.x * R
         const wz = palm.z * R
@@ -509,8 +527,8 @@ export default function AsciiIsland() {
           const p = [0, 1, 2].map((k) => (1 - u) * (1 - u) * base[k] + 2 * (1 - u) * u * ctrl[k] + u * u * top[k])
           const [px, py] = project(p[0], p[1], p[2])
           const ring = Math.floor(py / lh) % 2 === 0
-          plot(px, py, dirChar(px - prev[0], py - prev[1] || -1), ring ? TRUNK[2] : TRUNK[1])
-          if (palm.h > 0.3 && u < 0.85) plot(px + cw, py, ring ? ":" : "|", TRUNK[1])
+          pplot(px, py, dirChar(px - prev[0], py - prev[1] || -1), ring ? trunkHi : trunkLo)
+          if (palm.h > 0.3 && u < 0.85) pplot(px + cw, py, ring ? ":" : "|", trunkLo)
           prev = [px, py, 0]
         }
 
@@ -559,18 +577,18 @@ export default function AsciiIsland() {
                 const ch = dirChar(lx, ly)
                 const k = Math.max(1, Math.round(leaf / step))
                 for (let j = 1; j <= k; j++) {
-                  plot(px + lx * j * step, py + ly * j * step, ch, j === k || !front ? LEAF[1] : LEAF[2])
+                  pplot(px + lx * j * step, py + ly * j * step, ch, j === k || !front ? leafLo : leafHi)
                 }
               }
             }
-            plot(px, py, dirChar(dx, dy), front ? (u < 0.5 ? LEAF[3] : LEAF[2]) : LEAF[2])
+            pplot(px, py, dirChar(dx, dy), front ? (u < 0.5 ? leafTop : leafHi) : leafHi)
           }
         }
 
         // Cocos
-        plot(tsx - cw, tsy + lh * 0.6, "o", TRUNK[2])
-        plot(tsx + cw, tsy + lh * 0.6, "o", TRUNK[1])
-        plot(tsx, tsy, "@", TRUNK[3])
+        pplot(tsx - cw, tsy + lh * 0.6, "o", TRUNK[2])
+        pplot(tsx + cw, tsy + lh * 0.6, "o", TRUNK[1])
+        pplot(tsx, tsy, "@", TRUNK[3])
       }
 
       // Tele: se ven una o dos caras según el ángulo, cada una escalada por su orientación
@@ -633,6 +651,24 @@ export default function AsciiIsland() {
       items.push({ depth: project(TV_POS.x * R, 0, TV_POS.z * R)[2], draw: drawTV })
       items.sort((a, b) => a.depth - b.depth).forEach((item) => item.draw())
 
+      // De día, un margen de una celda alrededor de las palmeras sin caracteres de cielo
+      if (bgK > 0) {
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            const i = r * cols + c
+            if (shade[i] === 1) continue
+            const near =
+              (c > 0 && shade[i - 1] === 1) ||
+              (c < cols - 1 && shade[i + 1] === 1) ||
+              (r > 0 && shade[i - cols] === 1) ||
+              (r < rows - 1 && shade[i + cols] === 1)
+            if (!near) continue
+            shade[i] = 2
+            if (r * lh + lh / 2 < tops[c]) chars[i] = ""
+          }
+        }
+      }
+
       // --- Render: una llamada a fillText por tramo del mismo color ---
       ctx.clearRect(0, 0, W, H)
       for (let r = 0; r < rows; r++) {
@@ -668,6 +704,42 @@ export default function AsciiIsland() {
       // Copia reducida para el halo de neón
       gctx.clearRect(0, 0, glow.width, glow.height)
       gctx.drawImage(canvas, 0, 0, glow.width, glow.height)
+
+      // Fondo de día detrás de los caracteres (fuera del halo): cielo, isla y mar
+      if (bgK > 0) {
+        ctx.globalCompositeOperation = "destination-over"
+        // Silueta oscura detrás de las palmeras
+        ctx.globalAlpha = 0.7 * bgK
+        ctx.fillStyle = "rgb(4,26,14)"
+        for (let r = 0; r < rows; r++) {
+          let start = -1
+          for (let c = 0; c <= cols; c++) {
+            const on = c < cols && shade[r * cols + c] > 0
+            if (on && start < 0) start = c
+            else if (!on && start >= 0) {
+              ctx.fillRect(start * cw, r * lh, (c - start) * cw, lh)
+              start = -1
+            }
+          }
+        }
+        ctx.globalAlpha = 1
+        ctx.fillStyle = rgb(mixRGB(sandHi, [255, 150, 70], 0.4), 0.26 * bgK)
+        ctx.beginPath()
+        ctx.moveTo(0, shoreY)
+        for (let c = 0; c < cols; c++) ctx.lineTo(c * cw + cw / 2, Math.min(tops[c], shoreY))
+        ctx.lineTo(W, shoreY)
+        ctx.closePath()
+        ctx.fill()
+        const s = clamp(shoreY / H, 0, 1)
+        const bg = ctx.createLinearGradient(0, 0, 0, H)
+        bg.addColorStop(0, rgb(sky.top, 0.42 * bgK))
+        bg.addColorStop(s, rgb(sky.hor, 0.5 * bgK))
+        bg.addColorStop(Math.min(s + 0.001, 1), rgb(seaFar, 0.5 * bgK))
+        bg.addColorStop(1, rgb(seaNear, 0.4 * bgK))
+        ctx.fillStyle = bg
+        ctx.fillRect(0, 0, W, H)
+        ctx.globalCompositeOperation = "source-over"
+      }
     }
 
     const loop = (now: number) => {
