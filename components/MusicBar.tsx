@@ -96,11 +96,11 @@ export default function MusicBar({ autoplay = false }: MusicBarProps) {
     <div
       role="region"
       aria-label="Reproductor de música"
-      className="fixed inset-x-0 bottom-0 z-40 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-8 sm:pb-5"
+      className="pointer-events-none fixed inset-x-0 bottom-0 z-40 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-8 sm:pb-5"
     >
       <audio ref={audioRef} src={track.file} preload="metadata" />
 
-      <div className="ts-px-panel relative mx-auto flex h-9 max-w-2xl items-center gap-2.5 pl-1.5 pr-2 font-mono sm:gap-3">
+      <div className="ts-px-panel pointer-events-auto relative mx-auto flex h-9 max-w-2xl items-center gap-2.5 pl-1.5 pr-2 font-mono sm:gap-3">
         {/* Barra de progreso como borde superior del panel */}
         <input
           type="range"

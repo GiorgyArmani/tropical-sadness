@@ -8,6 +8,8 @@ import PixelIcon from "./PixelIcon"
 // pasos de 90° como las vistas de Blender.
 
 const FPS = 20
+const MAX_COLS = 360 // tope de la grilla ASCII (alcanza para pantallas de 2560 px sin agrandar la letra)
+const MAX_ROWS = 140
 const TILT = 0.2 // cuánto se ve el "piso" de la isla desde arriba
 const VIEWS = ["Frente", "Derecha", "Atrás", "Izquierda"]
 
@@ -376,10 +378,20 @@ export default function AsciiIsland() {
       glow.width = Math.ceil(W / 4)
       glow.height = Math.ceil(H / 4)
 
-      const fontSize = W < 640 ? 9 : W < 1200 ? 11 : 12
-      ctx.font = `${fontSize}px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace`
+      const setFont = (px: number) => {
+        ctx.font = `${px}px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace`
+        return ctx.measureText("M").width
+      }
+      let fontSize = W < 640 ? 9 : W < 1200 ? 11 : 12
+      cw = setFont(fontSize)
+      // Con zoom out la ventana mide muchos más px CSS: se agranda la letra para que la grilla
+      // no se multiplique (si no, cada cuadro dibuja 10 veces más celdas y se traba)
+      const grow = Math.max(1, W / cw / MAX_COLS, H / (fontSize * 1.05) / MAX_ROWS)
+      if (grow > 1) {
+        fontSize *= grow
+        cw = setFont(fontSize)
+      }
       ctx.textBaseline = "top"
-      cw = ctx.measureText("M").width
       lh = Math.round(fontSize * 1.05)
       cols = Math.ceil(W / cw)
       rows = Math.ceil(H / lh)

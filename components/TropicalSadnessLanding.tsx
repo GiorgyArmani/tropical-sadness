@@ -3,6 +3,7 @@
 import MusicBar from "./MusicBar"
 import AsciiIsland from "./AsciiIsland"
 import SocialLinks from "./SocialLinks"
+import ChatRoom from "./ChatRoom"
 
 export default function TropicalSadnessLanding() {
   return (
@@ -26,6 +27,7 @@ export default function TropicalSadnessLanding() {
         />
       </section>
 
+      <ChatRoom />
       <MusicBar />
     </main>
   )
