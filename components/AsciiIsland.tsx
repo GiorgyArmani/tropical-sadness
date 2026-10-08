@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { ChevronLeft, ChevronRight } from "lucide-react"
+import PixelIcon from "./PixelIcon"
 
 // Isla tropical en arte ASCII animado. La escena es 3D (palmeras, hojas y tele con
 // sus cuatro caras) proyectada a una grilla de caracteres, y se puede girar en
@@ -73,6 +73,19 @@ const WEATHER_ODDS: [string, number][] = [
   ["tormenta", 1],
   ["niebla", 1],
 ]
+// Nombre del clima real según el código WMO de Open-Meteo, para el cartel
+const weatherLabel = (code: number) => {
+  if (code >= 95) return "tormenta"
+  if (code >= 85 || (code >= 71 && code <= 77)) return "nieve"
+  if (code >= 80) return "chubascos"
+  if (code >= 61) return "lluvia"
+  if (code >= 51) return "llovizna"
+  if (code === 45 || code === 48) return "niebla"
+  if (code === 3) return "nublado"
+  if (code >= 1) return "algo nublado"
+  return "despejado"
+}
+
 const WEATHER_SPAN = 240 // segundos que dura cada clima
 const WEATHER_FADE = 25 // segundos de transición al siguiente
 
@@ -275,6 +288,7 @@ export default function AsciiIsland() {
   const glowRef = useRef<HTMLCanvasElement>(null)
   const targetRef = useRef(0) // ángulo objetivo, en pasos de 90°
   const [view, setView] = useState(0)
+  const [clima, setClima] = useState<{ label: string; city: string } | null>(null)
 
   const rotate = (dir: 1 | -1) => {
     targetRef.current += dir * (Math.PI / 2)
@@ -335,6 +349,9 @@ export default function AsciiIsland() {
         const data = await (await fetch(`/api/clima${coordsQuery}`)).json()
         if (cancelled || !data?.ok || !isWeather(data.weather)) return
         live = { from: lastWea, to: data.weather, at: performance.now() }
+        if (typeof data.code === "number") {
+          setClima({ label: weatherLabel(data.code), city: typeof data.city === "string" ? data.city : "" })
+        }
         if (typeof data.sunrise === "number" && typeof data.sunset === "number" && data.sunrise < data.sunset) {
           sun = { sunrise: data.sunrise, sunset: data.sunset }
         }
@@ -343,7 +360,8 @@ export default function AsciiIsland() {
       }
     }
     let climaTimer: ReturnType<typeof setInterval> | undefined
-    if (!forcedWeather) {
+    if (forcedWeather) setClima({ label: climaParam, city: "" })
+    else {
       fetchClima()
       climaTimer = setInterval(fetchClima, 15 * 60 * 1000)
     }
@@ -1104,9 +1122,6 @@ export default function AsciiIsland() {
     }
   }, [])
 
-  const buttonClass =
-    "pointer-events-auto inline-flex h-11 w-11 cursor-pointer items-center justify-center border border-white/30 bg-black/40 font-mono text-white backdrop-blur-sm transition-colors duration-200 hover:border-[#FFD600] hover:text-[#FFD600] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FFD600] focus-visible:ring-offset-2 focus-visible:ring-offset-black"
-
   return (
     <>
       <div aria-hidden="true" className="pointer-events-none absolute inset-0">
@@ -1118,19 +1133,37 @@ export default function AsciiIsland() {
         <div className="ascii-scanlines absolute inset-0" />
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-36 z-20 flex items-center justify-center gap-4 sm:bottom-28">
-        <button type="button" onClick={() => rotate(-1)} className={buttonClass} aria-label="Girar la isla a la izquierda">
-          <ChevronLeft className="h-5 w-5" aria-hidden="true" />
-        </button>
-        <span
-          aria-live="polite"
-          className="min-w-24 text-center font-mono text-xs uppercase tracking-[0.25em] text-white/80"
-        >
-          {VIEWS[view]}
-        </span>
-        <button type="button" onClick={() => rotate(1)} className={buttonClass} aria-label="Girar la isla a la derecha">
-          <ChevronRight className="h-5 w-5" aria-hidden="true" />
-        </button>
+      <div className="pointer-events-none absolute inset-x-0 bottom-[4.25rem] z-20 flex flex-col items-center gap-2 sm:bottom-20">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => rotate(-1)}
+            className="ts-px-btn pointer-events-auto h-6 w-6"
+            aria-label="Girar la isla a la izquierda"
+          >
+            <PixelIcon name="left" className="h-2.5 w-2.5" />
+          </button>
+          <span
+            aria-live="polite"
+            className="min-w-20 text-center font-mono text-[10px] uppercase tracking-[0.25em] text-white/80"
+          >
+            {VIEWS[view]}
+          </span>
+          <button
+            type="button"
+            onClick={() => rotate(1)}
+            className="ts-px-btn pointer-events-auto h-6 w-6"
+            aria-label="Girar la isla a la derecha"
+          >
+            <PixelIcon name="right" className="h-2.5 w-2.5" />
+          </button>
+        </div>
+        {clima && (
+          <p className="max-w-[90vw] truncate font-mono text-[10px] lowercase tracking-[0.15em] text-white/60">
+            <span className="text-[#5cff8a]">&gt;</span> {clima.label}
+            {clima.city && <span> · {clima.city}</span>}
+          </p>
+        )}
       </div>
     </>
   )

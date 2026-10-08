@@ -1,7 +1,7 @@
 "use client"
 
 import { useRef, useState, useEffect, type CSSProperties } from "react"
-import { Play, Pause, SkipForward, SkipBack, Volume2, VolumeX } from "lucide-react"
+import PixelIcon from "./PixelIcon"
 
 interface Track {
   title: string
@@ -90,99 +90,93 @@ export default function MusicBar({ autoplay = false }: MusicBarProps) {
 
   const track = tracks[currentTrack]
 
-  const iconBtn =
-    "flex h-9 w-9 flex-shrink-0 cursor-pointer items-center justify-center text-white/80 transition-colors duration-200 hover:text-[#FFD600] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FFD600]"
+  const label = `${track.title} · ${track.artist}`
 
   return (
     <div
       role="region"
       aria-label="Reproductor de música"
-      className="fixed inset-x-0 bottom-0 z-40 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2 sm:px-8"
+      className="fixed inset-x-0 bottom-0 z-40 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-8 sm:pb-5"
     >
       <audio ref={audioRef} src={track.file} preload="metadata" />
 
-      <div className="mx-auto max-w-3xl border border-white/60 bg-black/85 px-3 py-2 font-mono backdrop-blur-sm sm:px-4">
-        <p
-          className="mb-1 truncate text-center text-[11px] uppercase tracking-[0.15em] text-white md:hidden"
-          title={`${track.title} — ${track.artist}`}
+      <div className="ts-px-panel relative mx-auto flex h-9 max-w-2xl items-center gap-2.5 pl-1.5 pr-2 font-mono sm:gap-3">
+        {/* Barra de progreso como borde superior del panel */}
+        <input
+          type="range"
+          min={0}
+          max={duration || 0}
+          step="any"
+          value={currentTime}
+          aria-label="Posición de la pista"
+          aria-valuetext={`${formatTime(currentTime)} de ${formatTime(duration)}`}
+          onChange={(e) => {
+            if (audioRef.current) audioRef.current.currentTime = Number(e.target.value)
+          }}
+          className="ts-range absolute inset-x-0 -top-3 w-full"
+          style={{ "--fill": `${progress}%` } as CSSProperties}
+        />
+
+        {hasMultiple && (
+          <button type="button" onClick={() => changeTrack(-1)} aria-label="Pista anterior" className="ts-px-btn h-6 w-6">
+            <PixelIcon name="prev" className="h-2.5 w-2.5" />
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={togglePlay}
+          aria-label={isPlaying ? "Pausar" : "Reproducir"}
+          className="ts-px-btn ts-px-btn--primary h-6 w-6"
         >
-          {track.title}
-          <span className="text-white/60"> · {track.artist}</span>
+          <PixelIcon name={isPlaying ? "pause" : "play"} className="h-3 w-3" />
+        </button>
+
+        {hasMultiple && (
+          <button type="button" onClick={() => changeTrack(1)} aria-label="Siguiente pista" className="ts-px-btn h-6 w-6">
+            <PixelIcon name="next" className="h-2.5 w-2.5" />
+          </button>
+        )}
+
+        <p className="min-w-0 flex-1 overflow-hidden whitespace-nowrap text-[10px] uppercase tracking-[0.18em] text-white sm:text-[11px]" title={label}>
+          {isPlaying ? (
+            <span className="ts-marquee">
+              <span className="pr-10">{label}</span>
+              <span className="pr-10" aria-hidden="true">
+                {label}
+              </span>
+            </span>
+          ) : (
+            <span className="block truncate">{label}</span>
+          )}
         </p>
-        <div className="flex items-center gap-2 sm:gap-4">
-          {hasMultiple && (
-            <button type="button" onClick={() => changeTrack(-1)} aria-label="Pista anterior" className={iconBtn}>
-              <SkipBack className="h-3.5 w-3.5" strokeWidth={1.5} />
-            </button>
-          )}
 
-          <button
-            type="button"
-            onClick={togglePlay}
-            aria-label={isPlaying ? "Pausar" : "Reproducir"}
-            className="flex h-10 w-10 flex-shrink-0 cursor-pointer items-center justify-center border border-[#FFD600] bg-[#FFD600] text-black transition-colors duration-200 hover:bg-transparent hover:text-[#FFD600] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FFD600] focus-visible:ring-offset-2 focus-visible:ring-offset-black"
-          >
-            {isPlaying ? (
-              <Pause className="h-4 w-4" strokeWidth={2} fill="currentColor" />
-            ) : (
-              <Play className="ml-0.5 h-4 w-4" strokeWidth={2} fill="currentColor" />
-            )}
-          </button>
+        <span className="flex-shrink-0 text-[10px] tabular-nums text-white/70">
+          {formatTime(currentTime)}
+          <span className="hidden sm:inline"> / {formatTime(duration)}</span>
+        </span>
 
-          {hasMultiple && (
-            <button type="button" onClick={() => changeTrack(1)} aria-label="Siguiente pista" className={iconBtn}>
-              <SkipForward className="h-3.5 w-3.5" strokeWidth={1.5} />
-            </button>
-          )}
-
-          <p className="hidden min-w-0 max-w-[22rem] truncate text-xs uppercase tracking-[0.15em] text-white md:block" title={`${track.title} — ${track.artist}`}>
-            {track.title}
-            <span className="text-white/60"> · {track.artist}</span>
-          </p>
-
-          <span className="text-[11px] tabular-nums text-white/85">{formatTime(currentTime)}</span>
-          <input
-            type="range"
-            min={0}
-            max={duration || 0}
-            step="any"
-            value={currentTime}
-            aria-label="Posición de la pista"
-            aria-valuetext={`${formatTime(currentTime)} de ${formatTime(duration)}`}
-            onChange={(e) => {
-              if (audioRef.current) audioRef.current.currentTime = Number(e.target.value)
-            }}
-            className="ts-range min-w-0 flex-1"
-            style={{ "--fill": `${progress}%` } as CSSProperties}
-          />
-          <span className="text-[11px] tabular-nums text-white/85">{formatTime(duration)}</span>
-
-          <button
-            type="button"
-            onClick={() => setMuted((m) => !m)}
-            aria-label={muted ? "Activar sonido" : "Silenciar"}
-            className={iconBtn}
-          >
-            {muted || volume === 0 ? (
-              <VolumeX className="h-3.5 w-3.5" strokeWidth={1.5} />
-            ) : (
-              <Volume2 className="h-3.5 w-3.5" strokeWidth={1.5} />
-            )}
-          </button>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={muted ? 0 : volume}
-            aria-label="Volumen"
-            onChange={(e) => {
-              setVolume(Number(e.target.value))
-              setMuted(false)
-            }}
-            className="ts-range hidden w-16 sm:block"
-            style={{ "--fill": `${muted ? 0 : volume}%` } as CSSProperties}
-          />
-        </div>
+        <button
+          type="button"
+          onClick={() => setMuted((m) => !m)}
+          aria-label={muted ? "Activar sonido" : "Silenciar"}
+          className="ts-px-btn h-6 w-6"
+        >
+          <PixelIcon name={muted || volume === 0 ? "mute" : "sound"} className="h-3 w-3" />
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={muted ? 0 : volume}
+          aria-label="Volumen"
+          onChange={(e) => {
+            setVolume(Number(e.target.value))
+            setMuted(false)
+          }}
+          className="ts-range hidden w-14 sm:block"
+          style={{ "--fill": `${muted ? 0 : volume}%` } as CSSProperties}
+        />
       </div>
     </div>
   )

@@ -6,7 +6,7 @@ import SocialLinks from "./SocialLinks"
 
 export default function TropicalSadnessLanding() {
   return (
-    <main className="relative min-h-dvh w-full overflow-hidden bg-black text-white">
+    <main className="ts-cursor relative min-h-dvh w-full overflow-hidden bg-black text-white">
       <AsciiIsland />
 
       {/* Redes: centradas arriba en móvil, en la esquina superior derecha en desktop */}

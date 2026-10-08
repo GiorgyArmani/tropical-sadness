@@ -13,10 +13,10 @@ export default function SocialLinks({ className = "" }: { className?: string }) 
   return (
     <nav
       aria-label="Redes de Tropical Sadness"
-      className={`w-fit border border-white/70 bg-black/75 px-3 py-2.5 font-mono text-xs text-white backdrop-blur-sm sm:min-w-40 ${className}`}
+      className={`ts-px-panel w-fit px-2.5 py-1.5 font-mono text-[11px] text-white sm:min-w-40 sm:px-3 sm:py-2.5 sm:text-xs ${className}`}
     >
-      <p className="border-b border-dotted border-white/60 pb-1.5 text-center font-bold tracking-wide">redes</p>
-      <ul className="mt-2 flex max-w-[20rem] flex-wrap justify-center gap-x-3 gap-y-1 sm:max-w-none sm:flex-col sm:gap-y-1.5">
+      <p className="hidden border-b border-dotted border-white/60 pb-1.5 text-center font-bold tracking-wide sm:block">redes</p>
+      <ul className="flex max-w-[22rem] flex-wrap justify-center gap-x-2.5 gap-y-0.5 sm:mt-2 sm:max-w-none sm:flex-col sm:gap-y-1.5">
         {LINKS.map((link) => (
           <li key={link.label}>
             <span className="text-white/60" aria-hidden="true">
