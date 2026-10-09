@@ -12,6 +12,8 @@ const MAX_COLS = 360 // tope de la grilla ASCII (alcanza para pantallas de 2560 
 const MAX_ROWS = 140
 const TILT = 0.2 // cuánto se ve el "piso" de la isla desde arriba
 const VIEWS = ["Frente", "Derecha", "Atrás", "Izquierda"]
+const ZOOM_MIN = 0.3 // alejado: la isla queda chiquita en medio del mar
+const ZOOM_MAX = 2
 
 // Cada paleta va de tenue a brillante (4 niveles)
 const TV = ["#5a2a0c", "#b8561a", "#ff9a3c", "#ffd09a"]
@@ -96,7 +98,7 @@ const WEATHER_FADE = 25 // segundos de transición al siguiente
 const PALMS = [
   { x: -0.62, z: 0.2, h: 0.24, lean: [-0.4, 0.1], size: 0.17, phase: 0.0 },
   { x: -0.3, z: -0.4, h: 0.5, lean: [-0.2, -0.15], size: 0.24, phase: 1.3 },
-  { x: -0.18, z: 0.45, h: 0.36, lean: [0.2, 0.25], size: 0.2, phase: 2.1 },
+  { x: -0.42, z: 0.45, h: 0.36, lean: [0.2, 0.25], size: 0.2, phase: 2.1 },
   { x: 0.26, z: -0.15, h: 0.26, lean: [0.1, -0.2], size: 0.17, phase: 0.7 },
   { x: 0.44, z: -0.45, h: 0.48, lean: [0.22, -0.2], size: 0.23, phase: 1.8 },
   { x: 0.62, z: 0.3, h: 0.2, lean: [0.45, 0.15], size: 0.15, phase: 2.6 },
@@ -108,11 +110,12 @@ const FRONDS = 9
 const FROND_ELEV = [0.55, 0.2, 0.42, 0.05, 0.5, 0.28, 0.12, 0.6, 0.32]
 
 // La tele: posición en el mundo, orientación y tamaño en celdas
-const TV_POS = { x: 0.07, z: 0.22, yaw: 0 }
+const TV_POS = { x: 0, z: 0, yaw: 0 }
 const TV_W = 13
 const TV_D = 8
 const TV_H = 7
-const TV_SCALE = 1.9 // la tele se dibuja más grande que su sprite para que llame la atención
+const TV_SIZE = 0.35 // ancho de la tele relativo al radio de la isla, para que escale con ella
+const ISLAND_MAX_R = 420 // px CSS: con zoom out la isla no crece y queda sola en medio del mar
 
 const hash = (x: number, y: number) => {
   const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453
@@ -289,8 +292,25 @@ export default function AsciiIsland() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const glowRef = useRef<HTMLCanvasElement>(null)
   const targetRef = useRef(0) // ángulo objetivo, en pasos de 90°
+  const layerRef = useRef<HTMLDivElement>(null)
+  const zoomRef = useRef(1) // zoom objetivo de la cámara (rueda, pinch o teclas + / -)
+  const panRef = useRef({ x: 0, y: 0 }) // desplazamiento objetivo de la cámara, en px del mundo
   const [view, setView] = useState(0)
   const [clima, setClima] = useState<{ label: string; city: string } | null>(null)
+
+  const zoomBy = (k: number) => {
+    zoomRef.current = clamp(zoomRef.current * k, ZOOM_MIN, ZOOM_MAX)
+  }
+  // El paseo tiene límite: se puede recorrer el mar pero no perder la isla
+  const panBy = (dx: number, dy: number) => {
+    const p = panRef.current
+    p.x = clamp(p.x + dx, -window.innerWidth, window.innerWidth)
+    p.y = clamp(p.y + dy, -window.innerHeight * 0.4, window.innerHeight * 0.4)
+  }
+  const resetCamera = () => {
+    zoomRef.current = 1
+    panRef.current = { x: 0, y: 0 }
+  }
 
   const rotate = (dir: 1 | -1) => {
     targetRef.current += dir * (Math.PI / 2)
@@ -302,9 +322,67 @@ export default function AsciiIsland() {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (e.key === "ArrowLeft") rotate(-1)
       if (e.key === "ArrowRight") rotate(1)
+      if (e.ctrlKey || e.metaKey) return
+      if (e.key === "+" || e.key === "=") zoomBy(1.25)
+      if (e.key === "-") zoomBy(0.8)
+      if (e.key === "0") resetCamera()
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
+  }, [])
+
+  // Cámara: la rueda (o el pinch del trackpad) acerca y aleja la escena en vez de la página,
+  // arrastrar recorre el mar, dos dedos hacen zoom en el celular y el doble clic vuelve al inicio
+  useEffect(() => {
+    const layer = layerRef.current
+    if (!layer) return
+    const pointers = new Map<number, { x: number; y: number }>()
+    let pinchDist = 0
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      zoomBy(Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)))
+    }
+    const onDown = (e: PointerEvent) => {
+      layer.setPointerCapture(e.pointerId)
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()]
+        pinchDist = Math.hypot(a.x - b.x, a.y - b.y)
+      }
+    }
+    const onMove = (e: PointerEvent) => {
+      const prev = pointers.get(e.pointerId)
+      if (!prev) return
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      if (pointers.size === 1) {
+        panBy((e.clientX - prev.x) / zoomRef.current, (e.clientY - prev.y) / zoomRef.current)
+      } else if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()]
+        const dist = Math.hypot(a.x - b.x, a.y - b.y)
+        if (pinchDist > 0) zoomBy(dist / pinchDist)
+        pinchDist = dist
+      }
+    }
+    const onUp = (e: PointerEvent) => {
+      pointers.delete(e.pointerId)
+      pinchDist = 0
+    }
+
+    layer.addEventListener("wheel", onWheel, { passive: false })
+    layer.addEventListener("pointerdown", onDown)
+    layer.addEventListener("pointermove", onMove)
+    layer.addEventListener("pointerup", onUp)
+    layer.addEventListener("pointercancel", onUp)
+    layer.addEventListener("dblclick", resetCamera)
+    return () => {
+      layer.removeEventListener("wheel", onWheel)
+      layer.removeEventListener("pointerdown", onDown)
+      layer.removeEventListener("pointermove", onMove)
+      layer.removeEventListener("pointerup", onUp)
+      layer.removeEventListener("pointercancel", onUp)
+      layer.removeEventListener("dblclick", resetCamera)
+    }
   }, [])
 
   useEffect(() => {
@@ -328,6 +406,8 @@ export default function AsciiIsland() {
     let frame = 0
     let last = -Infinity
     let angle = targetRef.current
+    let zoom = zoomRef.current
+    const pan = { ...panRef.current }
     const horaParam = parseFloat(new URLSearchParams(window.location.search).get("hora") ?? "")
     const forcedHour = Number.isFinite(horaParam) ? ((horaParam % 24) + 24) % 24 : null
     const climaParam = new URLSearchParams(window.location.search).get("clima") ?? ""
@@ -418,14 +498,24 @@ export default function AsciiIsland() {
     const draw = (now: number, dt: number) => {
       const t = reduceMotion ? 8 : now / 1000
       angle = reduceMotion ? targetRef.current : angle + (targetRef.current - angle) * Math.min(1, dt * 5)
+      const ease = reduceMotion ? 1 : Math.min(1, dt * 6)
+      zoom += (zoomRef.current - zoom) * ease
+      pan.x += (panRef.current.x - pan.x) * ease
+      pan.y += (panRef.current.y - pan.y) * ease
       const cosA = Math.cos(angle)
       const sinA = Math.sin(angle)
 
       const portrait = H > W
-      const R = Math.min(W * (portrait ? 0.82 : 0.42), H * 0.55)
-      const Rx = Math.max(W * (portrait ? 0.75 : 0.56), R) // radio real de la isla (circular)
-      const cx = W / 2
-      const shoreY = H * 0.74
+      const R0 = Math.min(W * (portrait ? 0.82 : 0.42), H * 0.55, ISLAND_MAX_R)
+      const Rx0 = portrait ? Math.max(W * 0.75, R0) : Math.min(R0 * 1.75, W * 0.46)
+      const R = R0 * zoom
+      const Rx = Rx0 * zoom // radio real de la isla (circular)
+      const cx = W / 2 + pan.x * zoom
+      // El zoom se centra un poco arriba de la isla, para que al acercarse no se salgan las palmeras
+      const focusY = H * 0.6
+      const shoreY = focusY + (H * 0.74 - focusY) * zoom + pan.y * zoom
+      // El horizonte queda lejos: casi no se mueve con el zoom, pero siempre detrás de la isla
+      const horizonY = Math.min(H * 0.74 - Rx0 * TILT * 1.1 + pan.y * 0.3, shoreY - Rx * TILT * 1.1)
       const A = R * 0.3
       const tide = Math.sin(t * 0.55) * lh * 0.9
       const spin = angle * Rx * 0.8 // desplaza las texturas al girar
@@ -507,7 +597,7 @@ export default function AsciiIsland() {
       const sandLo = mixRGB([255, 138, 60], sandTint, sandMix)
       // De noche el mar se calma: menos crestas
       const crestThr = 0.3 + night * 0.25 - dayK * 0.18 - wea.wind * 0.15
-      const bodyRad = R * 0.11
+      const bodyRad = R0 * 0.11 // el sol y la luna están lejos: no cambian con el zoom
       const arc = (frac: number): [number, number] => [
         cx - W * 0.15 + (frac * 2 - 1) * W * 0.4,
         shoreY - Math.sqrt(Math.sin(Math.PI * clamp(frac, 0, 1))) * shoreY * 0.72,
@@ -539,18 +629,19 @@ export default function AsciiIsland() {
           let ch = ""
           let col = ""
 
-          if (y >= shoreY + tide - lh * 0.6 && y < shoreY + tide + lh * 1.4) {
+          const nearIsland = Math.abs(x - cx) < Rx + cw * 3
+          if (nearIsland && y >= shoreY + tide - lh * 0.6 && y < shoreY + tide + lh * 1.4) {
             // Espuma de la orilla
             const f = noise((x + spin) * 0.03 - t * 0.8, r * 0.7) + Math.sin(x * 0.02 + t * 1.6) * 0.25
             if (f > 0.35) {
               ch = f > 0.75 ? "~" : h > 0.5 ? "-" : "~"
               col = rgb(foamCol, (0.4 + f * 0.5 + h * 0.2) * L)
             }
-          } else if (y > shoreY) {
+          } else if (y > shoreY || (y < top && y > horizonY)) {
             // Mar con franjas diagonales, como el oasis de referencia
-            const d = (y - shoreY) / (H - shoreY)
+            const d = (y - horizonY) / (H - horizonY)
             const k = 0.016 / (0.3 + d)
-            const sx = x + spin * (0.6 + d)
+            const sx = (x - cx) / zoom + spin * (0.6 + d)
             const wave =
               Math.sin((sx * 0.9 + y * 2.2) * k - t * 1.3) * 0.7 +
               Math.sin((sx * -0.35 + y * 1.3) * k * 1.9 + t * 0.8) * 0.3 +
@@ -593,7 +684,7 @@ export default function AsciiIsland() {
             }
           } else {
             // Cielo: color según la hora, nubes, rayos del astro, sol/luna y estrellas
-            const vy = y / shoreY
+            const vy = y / horizonY
             const sunD = sunUp ? Math.hypot(x - sunX, y - sunY) : Infinity
             const moonD = moonUp ? Math.hypot(x - moonX, y - moonY) : Infinity
             if (bodyVis && sunD < bodyRad) {
@@ -910,9 +1001,10 @@ export default function AsciiIsland() {
         const sa = Math.sin(a)
         type Face = { width: number; src: number; normalX: number; fn: (c: number, r: number) => Cell }
         const faces: Face[] = []
-        const fw = Math.round(TV_W * TV_SCALE * Math.abs(ca))
-        const sw = Math.round(TV_D * TV_SCALE * Math.abs(sa))
-        const dh = Math.round(TV_H * TV_SCALE)
+        const tvScale = Math.max(0.45, (R * TV_SIZE) / (TV_W * cw))
+        const fw = Math.round(TV_W * tvScale * Math.abs(ca))
+        const sw = Math.round(TV_D * tvScale * Math.abs(sa))
+        const dh = Math.round(TV_H * tvScale)
         if (fw > 0) {
           faces.push(
             ca > 0
@@ -1099,7 +1191,7 @@ export default function AsciiIsland() {
         ctx.lineTo(W, shoreY)
         ctx.closePath()
         ctx.fill()
-        const s = clamp(shoreY / H, 0, 1)
+        const s = clamp(horizonY / H, 0, 1)
         // La niebla aclara y agrisa el fondo
         const fogTint = (c: RGB) => mixRGB(c, [195, 200, 212], wea.fog * 0.5)
         const bg = ctx.createLinearGradient(0, 0, 0, H)
@@ -1144,6 +1236,12 @@ export default function AsciiIsland() {
         />
         <div className="ascii-scanlines absolute inset-0" />
       </div>
+
+      <div
+        ref={layerRef}
+        aria-hidden="true"
+        className="absolute inset-0 touch-none select-none"
+      />
 
       <div className="pointer-events-none absolute inset-x-0 bottom-[4.25rem] z-20 flex flex-col items-center gap-2 sm:bottom-20">
         <div className="flex items-center gap-3">
