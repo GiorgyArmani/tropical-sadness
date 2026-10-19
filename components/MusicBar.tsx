@@ -1,73 +1,71 @@
 "use client"
 
-import { useRef, useState, useEffect, type CSSProperties } from "react"
+import { useRef, useState, useEffect, useImperativeHandle, type CSSProperties, type Ref } from "react"
 import PixelIcon from "./PixelIcon"
 
-interface Track {
-  title: string
-  artist: string
-  file: string
+// Lo que está al aire. Es una radio: no se elige tema ni se adelanta, se sintoniza.
+export const NOW_PLAYING = {
+  title: "MERENGOTHICA HALLOWEEN MIX 2025",
+  artist: "Nhil Ov Curse",
+  file: "/mixes/track1.mp3",
 }
 
-interface MusicBarProps {
-  autoplay?: boolean
-}
+export type RadioHandle = { connect: () => void }
 
-const tracks: Track[] = [
-  { title: "MERENGOTHICA HALLOWEEN MIX 2025", artist: "Nhil Ov Curse", file: "/mixes/track1.mp3" },
-]
+// Todos escuchan el mismo momento: la posición sale del reloj, no de cuándo entraste
+const livePosition = (duration: number) => (Date.now() / 1000) % duration
 
-const formatTime = (time: number) => {
-  if (!Number.isFinite(time)) return "0:00"
-  const mins = Math.floor(time / 60)
-  const secs = Math.floor(time % 60)
-  return `${mins}:${secs.toString().padStart(2, "0")}`
-}
-
-export default function MusicBar({ autoplay = false }: MusicBarProps) {
+export default function MusicBar({ ref }: { ref?: Ref<RadioHandle> }) {
   const audioRef = useRef<HTMLAudioElement>(null)
+  const syncPending = useRef(false)
   const [isPlaying, setIsPlaying] = useState(false)
-  const [currentTrack, setCurrentTrack] = useState(0)
+  const [tuning, setTuning] = useState(false)
   const [volume, setVolume] = useState(70)
   const [muted, setMuted] = useState(false)
-  const [currentTime, setCurrentTime] = useState(0)
-  const [duration, setDuration] = useState(0)
 
-  const hasMultiple = tracks.length > 1
-  const progress = duration ? (currentTime / duration) * 100 : 0
+  // Conectar = saltar al punto en vivo y sonar. Se llama dentro del click para que el navegador deje reproducir.
+  const connect = () => {
+    const audio = audioRef.current
+    if (!audio) return
+    if (Number.isFinite(audio.duration) && audio.duration > 0) audio.currentTime = livePosition(audio.duration)
+    else syncPending.current = true
+    setTuning(true)
+    audio.play().catch(() => setTuning(false))
+  }
 
-  useEffect(() => {
-    if (!autoplay) return
-    audioRef.current?.play().catch(() => {
-      // El navegador bloqueó el autoplay; el usuario puede darle play manualmente
-    })
-  }, [autoplay])
+  useImperativeHandle(ref, () => ({ connect }))
 
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
 
-    const onTime = () => setCurrentTime(audio.currentTime)
-    const onMeta = () => setDuration(audio.duration)
-    const onPlay = () => setIsPlaying(true)
-    const onPause = () => setIsPlaying(false)
-    const onEnd = () => {
-      if (hasMultiple) setCurrentTrack((prev) => (prev + 1) % tracks.length)
+    const onMeta = () => {
+      if (syncPending.current) {
+        syncPending.current = false
+        audio.currentTime = livePosition(audio.duration)
+      }
     }
+    const onPlay = () => setIsPlaying(true)
+    const onPause = () => {
+      setIsPlaying(false)
+      setTuning(false)
+    }
+    const onWaiting = () => setTuning(true)
+    const onPlaying = () => setTuning(false)
 
-    audio.addEventListener("timeupdate", onTime)
     audio.addEventListener("loadedmetadata", onMeta)
     audio.addEventListener("play", onPlay)
     audio.addEventListener("pause", onPause)
-    audio.addEventListener("ended", onEnd)
+    audio.addEventListener("waiting", onWaiting)
+    audio.addEventListener("playing", onPlaying)
     return () => {
-      audio.removeEventListener("timeupdate", onTime)
       audio.removeEventListener("loadedmetadata", onMeta)
       audio.removeEventListener("play", onPlay)
       audio.removeEventListener("pause", onPause)
-      audio.removeEventListener("ended", onEnd)
+      audio.removeEventListener("waiting", onWaiting)
+      audio.removeEventListener("playing", onPlaying)
     }
-  }, [hasMultiple])
+  }, [])
 
   useEffect(() => {
     if (audioRef.current) {
@@ -76,67 +74,38 @@ export default function MusicBar({ autoplay = false }: MusicBarProps) {
     }
   }, [volume, muted])
 
-  const togglePlay = () => {
-    const audio = audioRef.current
-    if (!audio) return
-    if (audio.paused) audio.play().catch(() => {})
-    else audio.pause()
+  const toggle = () => {
+    if (isPlaying) audioRef.current?.pause()
+    else connect()
   }
 
-  const changeTrack = (dir: 1 | -1) => {
-    setCurrentTrack((prev) => (prev + dir + tracks.length) % tracks.length)
-    setTimeout(() => audioRef.current?.play().catch(() => {}), 100)
-  }
-
-  const track = tracks[currentTrack]
-
-  const label = `${track.title} · ${track.artist}`
+  const label = `${NOW_PLAYING.title} · ${NOW_PLAYING.artist}`
 
   return (
     <div
       role="region"
-      aria-label="Reproductor de música"
+      aria-label="Radio"
       className="pointer-events-none fixed inset-x-0 bottom-0 z-40 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-8 sm:pb-5"
     >
-      <audio ref={audioRef} src={track.file} preload="metadata" />
+      <audio ref={audioRef} src={NOW_PLAYING.file} preload="metadata" loop />
 
       <div className="ts-px-panel pointer-events-auto relative mx-auto flex h-9 max-w-2xl items-center gap-2.5 pl-1.5 pr-2 font-mono sm:gap-3">
-        {/* Barra de progreso como borde superior del panel */}
-        <input
-          type="range"
-          min={0}
-          max={duration || 0}
-          step="any"
-          value={currentTime}
-          aria-label="Posición de la pista"
-          aria-valuetext={`${formatTime(currentTime)} de ${formatTime(duration)}`}
-          onChange={(e) => {
-            if (audioRef.current) audioRef.current.currentTime = Number(e.target.value)
-          }}
-          className="ts-range absolute inset-x-0 -top-3 w-full"
-          style={{ "--fill": `${progress}%` } as CSSProperties}
-        />
-
-        {hasMultiple && (
-          <button type="button" onClick={() => changeTrack(-1)} aria-label="Pista anterior" className="ts-px-btn h-6 w-6">
-            <PixelIcon name="prev" className="h-2.5 w-2.5" />
-          </button>
-        )}
-
         <button
           type="button"
-          onClick={togglePlay}
-          aria-label={isPlaying ? "Pausar" : "Reproducir"}
-          className="ts-px-btn ts-px-btn--primary h-6 w-6"
+          onClick={toggle}
+          aria-label={isPlaying ? "Desconectar" : "Conectar"}
+          title={isPlaying ? "desconectar" : undefined}
+          className={`ts-px-btn h-6 gap-1.5 px-2 text-[10px] uppercase tracking-[0.15em] ${isPlaying ? "" : "ts-px-btn--primary"}`}
         >
-          <PixelIcon name={isPlaying ? "pause" : "play"} className="h-3 w-3" />
+          {isPlaying ? (
+            <>
+              <span className="ts-onair h-1.5 w-1.5 bg-[#ff3b3b]" aria-hidden="true" />
+              {tuning ? "sintonizando" : "en vivo"}
+            </>
+          ) : (
+            "conectar"
+          )}
         </button>
-
-        {hasMultiple && (
-          <button type="button" onClick={() => changeTrack(1)} aria-label="Siguiente pista" className="ts-px-btn h-6 w-6">
-            <PixelIcon name="next" className="h-2.5 w-2.5" />
-          </button>
-        )}
 
         <p className="min-w-0 flex-1 overflow-hidden whitespace-nowrap text-[10px] uppercase tracking-[0.18em] text-white sm:text-[11px]" title={label}>
           {isPlaying ? (
@@ -150,11 +119,6 @@ export default function MusicBar({ autoplay = false }: MusicBarProps) {
             <span className="block truncate">{label}</span>
           )}
         </p>
-
-        <span className="flex-shrink-0 text-[10px] tabular-nums text-white/70">
-          {formatTime(currentTime)}
-          <span className="hidden sm:inline"> / {formatTime(duration)}</span>
-        </span>
 
         <button
           type="button"

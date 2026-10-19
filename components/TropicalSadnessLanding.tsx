@@ -1,11 +1,16 @@
 "use client"
 
-import MusicBar from "./MusicBar"
+import { useRef, useState } from "react"
+import MusicBar, { type RadioHandle } from "./MusicBar"
 import AsciiIsland from "./AsciiIsland"
 import SocialLinks from "./SocialLinks"
 import ChatRoom from "./ChatRoom"
+import RadioGate from "./RadioGate"
 
 export default function TropicalSadnessLanding() {
+  const radioRef = useRef<RadioHandle>(null)
+  const [nick, setNick] = useState("")
+
   return (
     <main className="ts-cursor relative min-h-dvh w-full overflow-hidden bg-black text-white">
       <AsciiIsland />
@@ -27,8 +32,18 @@ export default function TropicalSadnessLanding() {
         />
       </section>
 
-      <ChatRoom />
-      <MusicBar />
+      {nick && <ChatRoom nick={nick} />}
+      <MusicBar ref={radioRef} />
+
+      {!nick && (
+        <RadioGate
+          onConnect={(n) => {
+            // connect() va primero y dentro del click, así el navegador deja arrancar el audio
+            radioRef.current?.connect()
+            setNick(n)
+          }}
+        />
+      )}
     </main>
   )
 }

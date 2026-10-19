@@ -276,8 +276,20 @@
   to { transform: translateX(-50%); }
 }
 
+/* Luz de "al aire" de la radio */
+.ts-onair {
+  display: inline-block;
+  flex-shrink: 0;
+  box-shadow: 0 0 6px #ff3b3b;
+  animation: ts-onair 1.6s steps(2, jump-none) infinite;
+}
+@keyframes ts-onair {
+  50% { opacity: 0.25; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .logo-float,
+  .ts-onair,
   .ts-marquee {
     animation: none;
   }

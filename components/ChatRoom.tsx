@@ -15,7 +15,7 @@ const MESSAGE_TTL = 2 * 60 * 1000
 const FADE_LAST = 30 * 1000 // los últimos 30 s se va apagando
 const MAX_MESSAGES = 30
 const MAX_LEN = 200
-const NICK_LEN = 16
+export const NICK_LEN = 16
 const COLORS = ["#ffd600", "#5cff8a", "#ff9a3c", "#7ad7ff", "#ff6fb5", "#c79bff"]
 
 type Msg = { id: string; nick: string; text: string; at: number }
@@ -37,7 +37,7 @@ const getClient = () => {
   return client
 }
 
-const cleanNick = (s: string) => s.replace(/[^\p{L}\p{N}_.-]/gu, "").slice(0, NICK_LEN)
+export const cleanNick = (s: string) => s.replace(/[^\p{L}\p{N}_.-]/gu, "").slice(0, NICK_LEN)
 
 const cleanText = (s: string) =>
   s
@@ -58,10 +58,8 @@ const colorOf = (nick: string) => {
   return COLORS[Math.abs(h) % COLORS.length]
 }
 
-export default function ChatRoom() {
+export default function ChatRoom({ nick }: { nick: string }) {
   const [open, setOpen] = useState(false)
-  const [nick, setNick] = useState("")
-  const [draftNick, setDraftNick] = useState("")
   const [status, setStatus] = useState<Status>("connecting")
   const [attempt, setAttempt] = useState(0)
   const [users, setUsers] = useState(0)
@@ -189,12 +187,6 @@ export default function ChatRoom() {
 
   if (!SUPABASE_URL || !SUPABASE_KEY) return null
 
-  const join = (e: FormEvent) => {
-    e.preventDefault()
-    const n = cleanNick(draftNick)
-    if (n) setNick(n)
-  }
-
   const send = (e: FormEvent) => {
     e.preventDefault()
     const body = cleanText(text)
@@ -241,29 +233,7 @@ export default function ChatRoom() {
             </div>
           </header>
 
-          {!nick ? (
-            <form onSubmit={join} className="flex flex-1 flex-col justify-center gap-3 px-3">
-              <label htmlFor="ts-nick" className="text-white/80">
-                elegí un nombre para entrar
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  id="ts-nick"
-                  value={draftNick}
-                  onChange={(e) => setDraftNick(cleanNick(e.target.value))}
-                  maxLength={NICK_LEN}
-                  autoComplete="off"
-                  autoFocus
-                  placeholder="nombre"
-                  className="min-w-0 flex-1 border-b border-white/40 bg-transparent py-1 text-base text-white placeholder-white/30 outline-none focus:border-[#ffd600] sm:text-[11px]"
-                />
-                <button type="submit" disabled={!draftNick} className="ts-px-btn ts-px-btn--primary h-6 px-2 uppercase disabled:opacity-40">
-                  entrar
-                </button>
-              </div>
-              <p className="text-[10px] leading-relaxed text-white/45">nada se guarda · los mensajes se borran a los 2 min</p>
-            </form>
-          ) : status === "full" || status === "error" ? (
+          {status === "full" || status === "error" ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 px-3 text-center">
               <p className="text-white/80">{status === "full" ? "el chat está lleno. probá en un rato." : "no se pudo conectar."}</p>
               <button type="button" onClick={() => setAttempt((a) => a + 1)} className="ts-px-btn h-6 px-2 uppercase">
