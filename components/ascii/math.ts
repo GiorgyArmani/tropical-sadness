@@ -1,7 +1,7 @@
 // Utilidades del motor ASCII: ruido, colores y caracteres
 
 export type RGB = [number, number, number]
-export type Cell = [string, string] // [carácter, color]
+export type Cell = [string, string, boolean?] // [carácter, color, textura: al agrandar se repite]
 
 export const hash = (x: number, y: number) => {
   const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453

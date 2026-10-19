@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react"
 import { NOW_PLAYING } from "./MusicBar"
 import { NICK_LEN, cleanNick } from "./ChatRoom"
 
-// Pantalla de entrada: elegís tu nombre para el chat y te conectás a la radio, que ya está sonando
+// Pantalla de entrada: eliges tu nombre para el chat y te conectás a la radio, que ya está sonando
 export default function RadioGate({ onConnect }: { onConnect: (nick: string) => void }) {
   const [draft, setDraft] = useState("")
 
@@ -31,7 +31,7 @@ export default function RadioGate({ onConnect }: { onConnect: (nick: string) => 
         </p>
 
         <label htmlFor="ts-gate-nick" className="text-white/80">
-          elegí un nombre para el chat
+          elige un nombre para el chat
         </label>
         <div className="-mt-2 flex items-center gap-2">
           <span className="text-[#5cff8a]" aria-hidden="true">

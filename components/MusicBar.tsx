@@ -4,10 +4,12 @@ import { useRef, useState, useEffect, useImperativeHandle, type CSSProperties, t
 import PixelIcon from "./PixelIcon"
 
 // Lo que está al aire. Es una radio: no se elige tema ni se adelanta, se sintoniza.
-export const NOW_PLAYING = {
+// `scene` lleva al visitante al escenario del mix (ver components/ascii/scenes)
+export const NOW_PLAYING: { title: string; artist: string; file: string; scene?: string } = {
   title: "MERENGOTHICA HALLOWEEN MIX 2025",
   artist: "Nhil Ov Curse",
   file: "/mixes/track1.mp3",
+  scene: "cementerio",
 }
 
 export type RadioHandle = { connect: () => void }

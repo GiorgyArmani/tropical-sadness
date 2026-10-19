@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server"
 // Clima real del visitante para la isla ASCII.
 // La ubicación sale de los headers que agrega Vercel (aproximada por IP, sin pedir permiso);
 // en local se puede probar con /api/clima?lat=52.52&lon=13.41.
-// Devuelve los mismos parámetros que usa el sistema de clima de components/AsciiIsland.tsx.
+// Devuelve los mismos parámetros que usa el sistema de clima de components/ascii/sky.ts.
 
 type OpenMeteo = {
   current?: { weather_code: number; cloud_cover: number; precipitation: number; wind_speed_10m: number }

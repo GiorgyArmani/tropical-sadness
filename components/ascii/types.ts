@@ -50,6 +50,9 @@ export type Scene = {
   name: string // corto, para el botón de salida
   label: string // con artículo, para lectores de pantalla ("el cementerio")
   moon?: { color: RGB; full?: boolean; size?: number }
+  sun?: RGB
+  water?: [RGB, RGB] // color del agua de noche y a pleno día
+  backdrop?: number // opacidad del cielo, el suelo y el mar detrás de los objetos (0.6 por defecto)
   // Ajusta el cielo y el clima del momento al clima de la escena
   mood?: (sky: SkyKey, wea: Weather) => [SkyKey, Weather]
   land: (f: Frame) => Land
