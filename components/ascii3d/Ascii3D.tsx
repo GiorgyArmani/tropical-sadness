@@ -37,6 +37,8 @@ const gradeAt = (v: number): [number, number, number] => {
   const b = GRADE[i + 1]
   return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]
 }
+const STATIC_TONES = [0.45, 0.7, 0.95].map((a) => rgb([200, 205, 215], a))
+const STATIC_FRAMES = 4 // la estática alterna entre estos cuadros ya dibujados
 const OUT_MS = 550 // al irse: la cámara se mete de golpe y todo se vuelve estática
 const IN_MS = 1000 // al llegar: la estática se disuelve y el lente se abre desde plano
 const ENTRY_ZOOM = 0.35
@@ -134,6 +136,13 @@ void main() {
     col = mix(col, sky(rd), 1.0 - exp(-FOG * (1.0 + uFogW * 2.5) * fd));
     depth = clamp(fd / MAXD, 0.0, 0.98);
   } else col = sky(rd);
+#ifdef HAS_GLOW
+  // Cosas que brillan a través de la niebla. Donde el brillo es fuerte, la profundidad vale 254
+  // como marca: el ASCII pinta ese píxel con su color puro, sin mezclarlo con la paleta.
+  vec3 gw = glow(rd, m >= 0.0 ? t : 1e4);
+  col += gw;
+  if (max(gw.r, max(gw.g, gw.b)) > 0.5) depth = 254.0 / 255.0;
+#endif
   gl_FragColor = vec4(clamp(col, 0.0, 1.0), depth);
 }
 `
@@ -143,26 +152,30 @@ const VERT = "attribute vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }
 type GL = WebGLRenderingContext
 type Program = { prog: WebGLProgram; u: Record<string, WebGLUniformLocation | null> }
 
-const compile = (gl: GL, scene: Scene3D): Program | null => {
+// Compilar un shader de raymarching tarda bastante. Se hace en dos partes: arrancar (no espera)
+// y terminar (pide el resultado). Con KHR_parallel_shader_compile el navegador compila en otro
+// hilo y se puede preguntar si ya terminó sin trabar la página.
+const startCompile = (gl: GL, scene: Scene3D): WebGLProgram => {
   const shader = (type: number, src: string) => {
     const s = gl.createShader(type)!
     gl.shaderSource(s, src)
     gl.compileShader(s)
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-      console.error(`[ascii3d] ${scene.id}:`, gl.getShaderInfoLog(s))
-      return null
-    }
     return s
   }
-  const vs = shader(gl.VERTEX_SHADER, VERT)
-  const fs = shader(gl.FRAGMENT_SHADER, PRELUDE + scene.glsl + MAIN)
-  if (!vs || !fs) return null
   const prog = gl.createProgram()!
-  gl.attachShader(prog, vs)
-  gl.attachShader(prog, fs)
+  gl.attachShader(prog, shader(gl.VERTEX_SHADER, VERT))
+  gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, PRELUDE + scene.glsl + MAIN))
   gl.bindAttribLocation(prog, 0, "a")
   gl.linkProgram(prog)
+  return prog
+}
+
+const finishCompile = (gl: GL, scene: Scene3D, prog: WebGLProgram): Program | null => {
   if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    for (const s of gl.getAttachedShaders(prog) ?? []) {
+      const log = gl.getShaderInfoLog(s)
+      if (log) console.error(`[ascii3d] ${scene.id}:`, log)
+    }
     console.error(`[ascii3d] ${scene.id}:`, gl.getProgramInfoLog(prog))
     return null
   }
@@ -184,9 +197,13 @@ const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[
 type Props = {
   scene: Scene3D
   controlsClassName?: string // dónde van los controles de zoom (para no chocar con la radio)
+  preload?: Scene3D[] // escenas que se preparan de antemano, así el cambio no se traba
 }
 
-export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6 items-center" }: Props) {
+const HOLD_MAX = 2500 // si el shader nuevo no termina en este tiempo, se espera de una
+
+export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6 items-center", preload = [] }: Props) {
+  const preloadRef = useRef(preload)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const glowRef = useRef<HTMLCanvasElement>(null)
   const layerRef = useRef<HTMLDivElement>(null)
@@ -225,6 +242,77 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
     gl.enableVertexAttribArray(0)
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
     const programs = new Map<string, Program | null>()
+    const pending = new Map<string, WebGLProgram>()
+    const parallel = gl.getExtension("KHR_parallel_shader_compile") as { COMPLETION_STATUS_KHR: number } | null
+    let hitch = false // este cuadro terminó un shader: no cuenta para la calidad automática
+    const request = (s: Scene3D) => {
+      if (!programs.has(s.id) && !pending.has(s.id)) pending.set(s.id, startCompile(gl, s))
+    }
+    // ¿Está lista? Sin esperar solo responde que sí si el navegador ya terminó en segundo plano
+    const ready = (s: Scene3D, wait: boolean) => {
+      if (programs.has(s.id)) return true
+      request(s)
+      const p = pending.get(s.id)!
+      if (!wait && !(parallel && gl.getProgramParameter(p, parallel.COMPLETION_STATUS_KHR))) return false
+      pending.delete(s.id)
+      const prog = finishCompile(gl, s, p)
+      if (prog) {
+        // Un dibujo de 1 píxel obliga al driver a terminar ahora, tapado por la estática
+        gl.viewport(0, 0, 1, 1)
+        gl.useProgram(prog.prog)
+        gl.drawArrays(gl.TRIANGLES, 0, 3)
+      }
+      programs.set(s.id, prog)
+      hitch = true
+      return true
+    }
+    // Precarga: con compilación en paralelo se piden todas juntas; sin ella, una por vez y con calma
+    let preloadAt = performance.now() + 1500
+    const warmNext = (now: number) => {
+      if (now < preloadAt) return
+      const missing = Array.from({ length: STATIC_FRAMES }, (_, k) => k).find((k) => !statics[k])
+      if (missing !== undefined) {
+        staticFrame(missing)
+        preloadAt = now + 150
+        return
+      }
+      const rest = preloadRef.current.filter((s) => !programs.has(s.id))
+      if (!rest.length) return
+      if (parallel) {
+        rest.forEach(request)
+        rest.forEach((s) => ready(s, false))
+        preloadAt = now + 200
+      } else {
+        ready(rest[0], true)
+        preloadAt = now + 900
+      }
+    }
+    // Cuadros de estática hechos de antemano (se rehacen si cambia el tamaño)
+    let statics: HTMLCanvasElement[] = []
+    const staticFrame = (k: number) => {
+      if (statics[k]) return statics[k]
+      const sc = document.createElement("canvas")
+      sc.width = canvas.width
+      sc.height = canvas.height
+      const sx = sc.getContext("2d")!
+      sx.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0)
+      sx.font = ctx.font
+      sx.textBaseline = "top"
+      for (let tone = 0; tone < STATIC_TONES.length; tone++) {
+        sx.fillStyle = STATIC_TONES[tone]
+        for (let r = 0; r < rows; r++) {
+          let line = ""
+          for (let c = 0; c < cols; c++) {
+            const h = hash(c * 7 + k * 101, r * 3 + k * 37)
+            line += Math.floor(h * STATIC_TONES.length) === tone ? ramp(RAMP, hash(c + k * 53, r * 11 + k)) : " "
+          }
+          sx.fillText(line, 0, r * lh)
+        }
+      }
+      statics[k] = sc
+      hitch = true
+      return sc
+    }
     const liveSky = createLiveSky()
 
     let W = 0
@@ -279,20 +367,33 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
       off.width = cols
       off.height = rows
       pixels = new Uint8Array(cols * rows * 4)
+      statics = []
     }
 
     const draw = (now: number) => {
       const t = (now - start) / 1000
-      if (wantRef.current.id !== sceneRef.current.id && phase.kind !== "out") phase = { kind: "out", at: now }
+      if (wantRef.current.id !== sceneRef.current.id && phase.kind !== "out") {
+        // Si se pide otra escena mientras la anterior todavía aparece, la estática sigue desde
+        // donde estaba en vez de volver a cero (antes se veía un destello de la escena limpia)
+        const left = phase.kind === "in" ? 1 - clamp((now - phase.at) / IN_MS, 0, 1) : 0
+        phase = { kind: "out", at: now - left * OUT_MS }
+      }
       let rush = 0
       let staticAmt = 0
       if (phase.kind === "out") {
         const p = clamp((now - phase.at) / OUT_MS, 0, 1)
         rush = p * p * 0.9
         staticAmt = p
-        if (p >= 1) {
-          const nextScene = wantRef.current
+        // La escena nueva empieza a compilarse apenas se pide; se pasa recién cuando está lista,
+        // y mientras tanto la estática queda llena en vez de congelar la página
+        const nextScene = wantRef.current
+        request(nextScene)
+        if (p >= 1 && nextScene.id === sceneRef.current.id) phase = { kind: "in", at: now } // se arrepintió: vuelve
+        else if (p >= 1 && ready(nextScene, now - phase.at > HOLD_MAX || !parallel)) {
           sceneRef.current = nextScene
+          // La escena nueva cuesta distinto: la calidad automática empieza a medir de cero
+          cost = 0
+          costAt = now
           viewRef.current = { yaw: nextScene.camera.yaw, pitch: nextScene.camera.pitch }
           yaw = nextScene.camera.yaw
           pitch = nextScene.camera.pitch
@@ -306,10 +407,10 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
         const p = clamp((now - phase.at) / IN_MS, 0, 1)
         staticAmt = 1 - p
         if (p >= 1) phase = { kind: "none", at: now }
-      }
+      } else warmNext(now)
       const sc = sceneRef.current
       const cam = sc.camera
-      if (!programs.has(sc.id)) programs.set(sc.id, compile(gl, sc))
+      ready(sc, true)
       const program = programs.get(sc.id)
       if (!program) return
 
@@ -334,7 +435,8 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
         if (!reduced) walkRef.current += cam.walk.drift / FPS
         walk += (walkRef.current - walk) * 0.08
         const L = cam.walk.loop
-        const along = ((((walk + rush * 30) % L) + L) % L)
+        // Al salir se empuja un poco hacia adelante (antes eran 27 m: en la escalera daba varias vueltas y parpadeaba)
+        const along = ((((walk + rush * 3) % L) + L) % L)
         const bob = reduced ? 0 : Math.sin(walk * 2.2) * 0.025
         // En la escalera se sube: la altura sigue a los escalones
         const climb = cam.walk.climb
@@ -394,6 +496,8 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
       const tick = Math.floor(now / 50)
       const at = (c: number, r: number) => ((rows - 1 - clamp(r, 0, rows - 1)) * cols + clamp(c, 0, cols - 1)) * 4
       ctx.clearRect(0, 0, W, H)
+      // La estática no se escribe letra por letra (eran miles de dibujos por cuadro y eso trababa
+      // las transiciones): las celdas tapadas se saltean y encima va una imagen de estática ya hecha.
       for (let r = 0; r < rows; r++) {
         let runColor = ""
         let runStart = 0
@@ -402,6 +506,10 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
         for (let c = 0; c <= cols; c++) {
           let ch = ""
           let color = ""
+          if (c < cols && staticAmt > 0 && hash(c + tick * 13, r + tick * 7) < staticAmt * 0.95) {
+            if (run) run += " " // celda tapada por la estática: la escena no la dibuja
+            continue
+          }
           if (c < cols) {
             const i = at(c, r)
             const R = pixels[i]
@@ -430,9 +538,10 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
             const cb = (gray + (B - gray) * sat) * k
             const gk = 0.55 + 0.75 * v
             color = rgb([cr + (g[0] * gk - cr) * gr, cg + (g[1] * gk - cg) * gr, cb + (g[2] * gk - cb) * gr])
-            if (staticAmt > 0 && hash(c + tick * 13, r + tick * 7) < staticAmt * 0.95) {
-              ch = ramp(RAMP, hash(c * 3 + tick, r))
-              color = rgb([200, 205, 215], 0.4 + hash(r, c + tick) * 0.6)
+            if (d === 254) {
+              // Brillo marcado por la escena (ojos): color puro y carácter lleno
+              ch = R + G + B > 330 ? "@" : "o"
+              color = rgb([R, G * 0.7, B * 0.7])
             }
             if (ch === " ") {
               if (run) run += " "
@@ -449,6 +558,11 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
             run = ch
           } else run += ch
         }
+      }
+      if (staticAmt > 0) {
+        ctx.globalAlpha = Math.min(1, staticAmt * 1.1)
+        ctx.drawImage(staticFrame(tick % STATIC_FRAMES), 0, 0, W, H)
+        ctx.globalAlpha = 1
       }
       // Lluvia por delante, solo en los espacios abiertos
       if (sc.outdoor && wea.rain > 0.02 && staticAmt < 0.5) {
@@ -473,10 +587,13 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
     const loop = (now: number) => {
       if (now - last >= 1000 / FPS) {
         const t0 = performance.now()
+        hitch = false
         draw(now)
         const ms = performance.now() - t0
-        cost = cost ? cost * 0.9 + ms * 0.1 : ms
-        if (now - costAt > 2000) {
+        // Los cuadros que terminaron un shader son lentos una sola vez: no deben bajar la calidad
+        if (!hitch) cost = cost ? cost * 0.9 + ms * 0.1 : ms
+        // Durante una transición no se cambia el tamaño de letra (se vería un salto)
+        if (phase.kind === "none" && cost && now - costAt > 2000) {
           costAt = now
           if (cost > 24 && coarse < 4) {
             coarse++

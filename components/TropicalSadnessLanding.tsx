@@ -44,7 +44,7 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
         <AsciiWorld scene={scene} />
       ) : (
         <div className="absolute inset-0">
-          <Ascii3D scene={scene3d} controlsClassName="left-3 bottom-[3.9rem] items-start sm:inset-x-0 sm:bottom-20 sm:items-center" />
+          <Ascii3D scene={scene3d} preload={SCENES_3D} controlsClassName="left-3 bottom-[3.9rem] items-start sm:inset-x-0 sm:bottom-20 sm:items-center" />
         </div>
       )}
 

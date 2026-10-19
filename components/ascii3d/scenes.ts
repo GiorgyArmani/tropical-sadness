@@ -38,8 +38,37 @@ export type Scene3D = {
 // --- Pasillo: una oficina vacía que se repite para siempre. La rueda camina hacia adentro ---
 
 const hallway = /* glsl */ `
-#define FOG 0.04
+#define FOG 0.055
 #define MAXD 70.0
+#define APP_Z 10.0
+
+// Aparición al fondo del pasillo: cada 11 segundos se tira la moneda. A veces no hay nada,
+// a veces está el demonio, a veces solo unos ojos mirando. Aparece y se va titilando.
+// kind: 0 = demonio, 1 = un par de ojos, 2 = varios pares
+float appear(out float kind) {
+  float slot = floor(uTime / 11.0);
+  float f = fract(uTime / 11.0) * 11.0;
+  kind = floor(hash1(slot * 3.1 + 7.0) * 3.0);
+  float on = step(hash1(slot * 1.7 + 2.0), 0.45) * step(2.0, f) * step(f, 6.5);
+  // titileo al llegar y al irse, como una lámpara que falla
+  float edge = min(f - 2.0, 6.5 - f);
+  float flick = step(0.35, hash1(floor(uTime * 14.0) + slot));
+  return on * mix(flick, 1.0, step(0.5, edge));
+}
+
+// Dónde están los ojos ahora: n pares, cada uno con su centro y la mitad de su separación.
+// Lo usan la forma (map) y el brillo (glow), así los dos coinciden.
+float eyeCount(out float kind) {
+  if (appear(kind) < 0.5) return 0.0;
+  return kind < 1.5 ? 1.0 : 5.0;
+}
+vec3 appBase() { return vec3(sin(uTime * 0.11) * 0.3, 0.0, uRo.z - APP_Z); }
+vec4 eyePair(float i, float kind) {
+  if (kind < 0.5) return vec4(0.0, 2.08, 0.3, 0.115); // en la cara del demonio
+  if (kind < 1.5) return vec4(0.0, 1.6, 0.0, 0.14);
+  float k = i + floor(uTime / 11.0) * 9.0;
+  return vec4((hash1(k * 5.3) - 0.5) * 2.4, 0.9 + hash1(k * 2.9) * 1.3, -hash1(k * 7.7) * 3.0, 0.12);
+}
 
 vec2 map(vec3 p) {
   float zc = mod(p.z + 3.0, 6.0) - 3.0;
@@ -61,21 +90,61 @@ vec2 map(vec3 p) {
   // Tubos de luz del techo
   float lz = mod(p.z + 2.0, 4.0) - 2.0;
   r = opU(r, vec2(sdBox(vec3(p.x, p.y - 2.86, lz), vec3(0.2, 0.04, 0.65)), 5.0));
-  // Alguien parado al fondo, siempre a la misma distancia; cada tanto no está
-  float here = step(0.0, sin(uTime * 0.23));
-  vec3 fp = p - vec3(sin(uTime * 0.11) * 0.5, 0.0, uRo.z - 22.0);
-  float body = min(sdCapsule(fp, vec3(0.0, 0.25, 0.0), vec3(0.0, 1.35, 0.0), 0.2), length(fp - vec3(0.0, 1.62, 0.0)) - 0.15);
-  if (here > 0.5) r = opU(r, vec2(body, 8.0));
+  // La aparición, siempre a la misma distancia por más que se camine
+  float kind;
+  float n = eyeCount(kind);
+  if (n > 0.5) {
+    vec3 fp = p - appBase();
+    if (kind < 0.5) {
+      // Demonio: alto, encorvado, cuernos y brazos largos hasta las rodillas
+      vec3 q = vec3(abs(fp.x), fp.yz);
+      float body = sdCapsule(fp, vec3(0.0, 0.3, 0.0), vec3(0.0, 1.75, 0.08), 0.24);
+      body = min(body, sdEllipsoid(fp - vec3(0.0, 2.05, 0.12), vec3(0.2, 0.24, 0.2)));
+      body = min(body, sdCapsule(q, vec3(0.1, 2.2, 0.1), vec3(0.32, 2.62, -0.05), 0.045)); // cuernos
+      body = min(body, sdCapsule(q, vec3(0.28, 1.65, 0.05), vec3(0.42, 0.55, 0.2), 0.07)); // brazos
+      body = min(body, sdCapsule(q, vec3(0.12, 0.3, 0.0), vec3(0.16, 0.0, 0.0), 0.08)); // patas
+      r = opU(r, vec2(body, 8.0));
+    }
+    // Ojos (del demonio, o solos en la oscuridad)
+    for (int i = 0; i < 5; i++) {
+      if (float(i) >= n) break;
+      vec4 c = eyePair(float(i), kind);
+      vec3 e = fp - c.xyz;
+      e.x = abs(e.x) - c.w;
+      r = opU(r, vec2(length(e * vec3(1.0, 1.7, 1.0)) - 0.07, 9.0));
+    }
+  }
   return r;
 }
 
+// Brillo rojo alrededor de cada ojo (se suma después de la niebla, así se ve desde lejos)
+#define HAS_GLOW
+vec3 glow(vec3 rd, float t) {
+  float kind;
+  float n = eyeCount(kind);
+  vec3 g = vec3(0.0);
+  for (int i = 0; i < 5; i++) {
+    if (float(i) >= n) break;
+    vec4 c = eyePair(float(i), kind);
+    for (int s = 0; s < 2; s++) {
+      vec3 e = appBase() + c.xyz + vec3((float(s) * 2.0 - 1.0) * c.w, 0.0, 0.0) - uRo;
+      float along = dot(e, rd);
+      if (along < 0.0 || t < along - 0.3) continue; // detrás de la cámara o tapado
+      float d = length(e - rd * along) / along; // distancia angular al ojo
+      g += vec3(1.0, 0.1, 0.05) * exp(-d * d * 16000.0) * 1.8;
+    }
+  }
+  return g;
+}
+
+// El fondo se pierde en una penumbra marrón: el pasillo se traga la luz
 vec3 sky(vec3 rd) {
-  return vec3(0.42, 0.37, 0.17);
+  return vec3(0.1, 0.075, 0.04);
 }
 
 // Algunos tubos parpadean (el patrón se repite con el pasillo, así el loop no se nota)
 float lamp(float idx) {
-  float bad = step(0.75, hash1(mod(idx, 150.0) * 7.3));
+  float bad = step(0.55, hash1(mod(idx, 150.0) * 7.3));
   float flick = step(0.25, fract(sin(floor(uTime * 9.0) * 12.9 + mod(idx, 150.0)) * 43758.5));
   return mix(1.0, flick * 0.7, bad);
 }
@@ -85,10 +154,11 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) {
   float lz = mod(p.z + 2.0, 4.0) - 2.0;
   vec3 d = vec3(p.x, p.y - 2.8, lz);
   vec3 L = normalize(-d);
-  float lmp = 0.55 + 0.45 * lamp(idx);
-  float near = 1.3 / (1.0 + dot(d, d) * 0.5);
+  float lmp = 0.35 + 0.65 * lamp(idx);
+  // Casi sin luz de ambiente: solo se ve lo que está debajo de un tubo
+  float near = 1.4 / (1.0 + dot(d, d) * 0.6);
   float dif = max(dot(n, L), 0.0);
-  vec3 light = vec3(1.0, 0.95, 0.75) * (0.42 + near * (0.5 + 0.7 * dif)) * lmp;
+  vec3 light = vec3(1.0, 0.93, 0.72) * (0.2 + near * (0.5 + 0.8 * dif)) * lmp;
   if (m < 1.5) {
     // Alfombra mostaza gastada, más oscura junto a las paredes
     float worn = 0.85 + 0.3 * noise2(p.xz * 7.0) - smoothstep(1.0, 1.7, abs(p.x)) * 0.25;
@@ -117,8 +187,10 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) {
   if (m < 6.5) return vec3(0.9, 0.75, 0.35) * light + 0.15;
   // Cartel verde de salida que nunca lleva a ningún lado
   if (m < 7.5) return vec3(0.25, 1.1, 0.45);
-  // La figura: una silueta oscura con un borde de luz
-  return vec3(0.04, 0.03, 0.06) + vec3(0.9, 0.6, 0.9) * pow(1.0 - max(dot(-rd, n), 0.0), 3.0) * 0.6;
+  // El demonio: negro, con un borde rojizo apenas
+  if (m < 8.5) return vec3(0.02, 0.01, 0.015) + vec3(0.9, 0.2, 0.15) * pow(1.0 - max(dot(-rd, n), 0.0), 3.0) * 0.5;
+  // Ojos: rojo puro, para que el ASCII los pinte rojos
+  return vec3(6.0, 0.25, 0.1);
 }
 `
 
@@ -472,7 +544,7 @@ export const SCENES_3D: Scene3D[] = [
     label: "el pasillo",
     blurb: "espacio 01 · todas las puertas están cerradas",
     glsl: hallway,
-    exposure: 1.5,
+    exposure: 1.4,
     saturation: 0.8,
     grade: 0.35,
     camera: {
