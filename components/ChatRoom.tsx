@@ -67,9 +67,9 @@ const merge = (prev: Msg[], add: Msg[]) => {
 
 // Los errores que manda el servidor (supabase/foro.sql), en palabras
 const reason = (message: string) => {
-  if (message.includes("modo_lento")) return "modo lento: esperá unos segundos"
+  if (message.includes("modo_lento")) return "modo lento: espera unos segundos"
   if (message.includes("limite_diario")) return "llegaste al límite de mensajes de hoy"
-  if (message.includes("foro_saturado")) return "el foro está saturado, probá en un rato"
+  if (message.includes("foro_saturado")) return "el foro está saturado, intenta en un rato"
   return "no se pudo enviar"
 }
 
@@ -288,7 +288,7 @@ export default function ChatRoom({ nick }: { nick: string }) {
                   </button>
                 )}
                 {status === "connecting" && messages.length === 0 && <p className="text-white/45">conectando…</p>}
-                {status === "online" && messages.length === 0 && <p className="text-white/45">todavía nadie escribió. empezá vos…</p>}
+                {status === "online" && messages.length === 0 && <p className="text-white/45">todavía nadie ha escrito. empieza tú…</p>}
                 {messages.map((m) => (
                   <p key={m.id} className="break-words leading-snug">
                     <span className="float-right ml-2 text-[9px] tabular-nums text-white/30">{when(m.at)}</span>
@@ -319,7 +319,7 @@ export default function ChatRoom({ nick }: { nick: string }) {
                 <button
                   type="submit"
                   disabled={!text.trim() || status !== "online" || wait > 0}
-                  aria-label={wait ? `Modo lento, esperá ${wait} segundos` : "Enviar"}
+                  aria-label={wait ? `Modo lento, espera ${wait} segundos` : "Enviar"}
                   className="ts-px-btn ts-px-btn--primary h-6 min-w-6 px-1 tabular-nums disabled:opacity-40"
                 >
                   {wait ? wait : <PixelIcon name="right" className="h-2.5 w-2.5" />}

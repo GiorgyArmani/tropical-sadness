@@ -35,7 +35,14 @@ const ISLAND_MAX_R = 420 // px CSS: con zoom out la isla no crece y queda sola e
 const SKY_RAMP = " .`'-:+*"
 const SWITCH_MS = 900 // estática de tele al cambiar de escena
 
-export default function AsciiWorld({ scene }: { scene: Scene }) {
+// active = false: montado pero en pausa (mientras se ven los espacios 3D), así volver no lo rearma
+export default function AsciiWorld({ scene, active = true }: { scene: Scene; active?: boolean }) {
+  const activeRef = useRef(active)
+  const wakeRef = useRef(false)
+  useEffect(() => {
+    if (active && !activeRef.current) wakeRef.current = true
+    activeRef.current = active
+  }, [active])
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const glowRef = useRef<HTMLCanvasElement>(null)
   const targetRef = useRef(0) // ángulo objetivo, en pasos de 90°
@@ -71,6 +78,7 @@ export default function AsciiWorld({ scene }: { scene: Scene }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (!activeRef.current) return
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (e.key === "ArrowLeft") rotate(-1)
       if (e.key === "ArrowRight") rotate(1)
@@ -718,6 +726,16 @@ export default function AsciiWorld({ scene }: { scene: Scene }) {
     }
 
     const loop = (now: number) => {
+      if (!activeRef.current) {
+        frame = requestAnimationFrame(loop)
+        return
+      }
+      if (wakeRef.current) {
+        // Volvió a verse: oculto medía cero, hay que medir la pantalla de nuevo
+        wakeRef.current = false
+        resize()
+        last = now
+      }
       const elapsed = now - last
       if (elapsed >= 1000 / FPS) {
         draw(now, Math.min(elapsed, 200) / 1000)

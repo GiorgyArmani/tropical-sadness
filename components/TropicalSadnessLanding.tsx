@@ -1,11 +1,12 @@
 "use client"
 
 import { useSearchParams } from "next/navigation"
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import MusicBar, { type RadioHandle } from "./MusicBar"
 import AsciiWorld from "./ascii/AsciiWorld"
 import { useScene } from "./ascii/scenes"
-import Ascii3D from "./ascii3d/Ascii3D"
+import Ascii3D, { type Ascii3DHandle, type NearDoor } from "./ascii3d/Ascii3D"
+import { KIND, LEVELS, SCENE_OF, nextDoorOf, type Entry } from "./ascii3d/maze"
 import { SCENES_3D } from "./ascii3d/scenes"
 import PixelIcon from "./PixelIcon"
 import SocialLinks from "./SocialLinks"
@@ -26,14 +27,52 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
   const nick = saved ?? ""
   const tuned = useRef(false) // la radio ya arrancó con un gesto en esta visita
   const [mode, setMode] = useState<Mode>(initialMode)
+  // Los dos mundos quedan montados y el que no se ve, en pausa: pasar de uno a otro no rearma nada.
+  // El 3D se prepara solo en segundo plano a los pocos segundos (contexto y shaders), así el primer
+  // cambio tampoco se traba.
+  const [has3d, setHas3d] = useState(initialMode === "3d")
+  useEffect(() => {
+    if (has3d) return
+    const id = window.setTimeout(() => setHas3d(true), 2500)
+    return () => clearTimeout(id)
+  }, [has3d])
   const params = useSearchParams()
-  const [index3d, setIndex3d] = useState(() => Math.max(0, SCENES_3D.findIndex((s) => s.id === params.get("escena"))))
   const { scene, next, go } = useScene()
-  const scene3d = SCENES_3D[index3d]
-  const next3d = SCENES_3D[(index3d + 1) % SCENES_3D.length]
+
+  // El 3D es un laberinto: se está en un lugar, y se vuelve al pasillo por la puerta por la que se entró
+  const engineRef = useRef<Ascii3DHandle>(null)
+  const [place, setPlace] = useState(() => {
+    const id = SCENES_3D.some((s) => s.id === params.get("escena")) ? params.get("escena")! : "pasillo"
+    return { id, entry: undefined as Entry | undefined, visit: 0 }
+  })
+  // Si se llega directo a una escena (?escena=isla), se vuelve por la primera puerta de ese tipo
+  const [origin, setOrigin] = useState<Entry>(() => {
+    const kind = Number(Object.keys(SCENE_OF).find((k) => SCENE_OF[Number(k)] === place.id) ?? KIND.isla)
+    return { level: 0, door: nextDoorOf(0, kind) }
+  })
+  const [near, setNear] = useState<NearDoor | null>(null)
+  const scene3d = SCENES_3D.find((s) => s.id === place.id) ?? SCENES_3D[0]
+  const inHall = place.id === "pasillo"
+
+  const travel = useCallback((id: string, entry?: Entry) => setPlace((p) => ({ id, entry, visit: p.visit + 1 })), [])
+  const onEnter = useCallback(
+    (kind: number, from: Entry) => {
+      if (kind === KIND.pasillo) {
+        // La puerta roja lleva a otro nivel del pasillo: se sale por una puerta roja de allá
+        const level = (from.level + 1) % LEVELS
+        travel("pasillo", { level, door: nextDoorOf(level, KIND.pasillo, from.door) })
+      } else {
+        setOrigin(from)
+        travel(SCENE_OF[kind])
+      }
+    },
+    [travel],
+  )
+  const backToHall = useCallback(() => travel("pasillo", origin), [travel, origin])
 
   const switchMode = () => {
     const to: Mode = mode === "2d" ? "3d" : "2d"
+    if (to === "3d") setHas3d(true)
     burstRef.current?.play(() => {
       setMode(to)
       window.history.replaceState(null, "", to === "3d" ? "/3d" : "/")
@@ -55,19 +94,31 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
     return off
   }, [saved])
 
-  const exit = mode === "2d" ? next : next3d
 
   return (
     <main className="ts-cursor relative min-h-dvh w-full overflow-hidden bg-black text-white">
-      {mode === "2d" ? (
-        <AsciiWorld scene={scene} />
-      ) : (
-        <div className="absolute inset-0">
-          <Ascii3D scene={scene3d} preload={SCENES_3D} controlsClassName="left-3 bottom-[3.9rem] items-start sm:inset-x-0 sm:bottom-20 sm:items-center" />
+      <div className={mode === "2d" ? "absolute inset-0" : "hidden"}>
+        <AsciiWorld scene={scene} active={mode === "2d"} />
+      </div>
+      {has3d && (
+        <div className={mode === "3d" ? "absolute inset-0" : "hidden"}>
+          <Ascii3D
+            ref={engineRef}
+            active={mode === "3d"}
+            scene={scene3d}
+            entry={place.entry}
+            visit={place.visit}
+            onNear={setNear}
+            onEnter={onEnter}
+            onLeave={backToHall}
+            preload={SCENES_3D}
+            controlsClassName="left-3 bottom-[3.9rem] items-start sm:inset-x-0 sm:bottom-20 sm:items-center"
+          />
         </div>
       )}
 
-      {/* Junto al chat: pasar de mundo y la salida al próximo escenario de este mundo.
+      {/* Junto al chat: pasar de mundo y la salida. En 2D, el próximo escenario; en 3D, la puerta:
+          en el pasillo aparece al lado de una puerta con luz, y en las demás escenas vuelve al pasillo.
           En celular van apilados arriba del chat; en pantallas grandes, en fila a su izquierda. */}
       <div className="fixed bottom-[5.9rem] right-3 z-30 flex flex-col items-end gap-2 sm:bottom-[6.5rem] sm:right-8 lg:bottom-5 lg:right-[6.75rem] lg:flex-row-reverse lg:items-center">
         <button
@@ -79,15 +130,39 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
           {mode === "2d" ? "3d" : "2d"}
           <PixelIcon name="right" className="h-2.5 w-2.5" />
         </button>
-        <button
-          type="button"
-          onClick={() => (mode === "2d" ? go(next) : setIndex3d((index3d + 1) % SCENES_3D.length))}
-          aria-label={`Ir a ${exit.label}`}
-          className="ts-px-btn h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em]"
-        >
-          {exit.name}
-          <PixelIcon name="right" className="h-2.5 w-2.5" />
-        </button>
+        {mode === "2d" ? (
+          <button
+            type="button"
+            onClick={() => go(next)}
+            aria-label={`Ir a ${next.label}`}
+            className="ts-px-btn h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em]"
+          >
+            {next.name}
+            <PixelIcon name="right" className="h-2.5 w-2.5" />
+          </button>
+        ) : inHall ? (
+          near && (
+            <button
+              type="button"
+              onClick={() => engineRef.current?.open()}
+              aria-label="Abrir la puerta"
+              className="ts-px-btn ts-px-btn--primary h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em]"
+            >
+              abrir puerta
+              <PixelIcon name="right" className="h-2.5 w-2.5" />
+            </button>
+          )
+        ) : (
+          <button
+            type="button"
+            onClick={backToHall}
+            aria-label="Volver al pasillo por la puerta"
+            className="ts-px-btn h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em]"
+          >
+            puerta · pasillo
+            <PixelIcon name="right" className="h-2.5 w-2.5" />
+          </button>
+        )}
       </div>
 
       {/* Redes: centradas arriba en móvil, en la esquina superior derecha en desktop */}

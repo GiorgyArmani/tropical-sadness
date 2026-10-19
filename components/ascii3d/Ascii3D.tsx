@@ -7,10 +7,11 @@
 // El zoom es un "dolly zoom": alejado, el lente es casi plano y todo se ve 2D; al acercarse el
 // lente se abre, aparece la profundidad, y al final la cámara entra en el espacio.
 
-import { useEffect, useRef } from "react"
+import { useEffect, useImperativeHandle, useRef, type Ref } from "react"
 import { clamp, dirChar, hash, ramp, rgb } from "../ascii/math"
 import PixelIcon from "../PixelIcon"
 import { createLiveSky } from "./live"
+import { DOOR_GAP, DOORS, kindAt, sideOf, type Entry } from "./maze"
 import type { Scene3D } from "./scenes"
 
 const FPS = 30
@@ -38,7 +39,7 @@ const gradeAt = (v: number): [number, number, number] => {
   return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]
 }
 const STATIC_TONES = [0.45, 0.7, 0.95].map((a) => rgb([200, 205, 215], a))
-const STATIC_FRAMES = 4 // la estática alterna entre estos cuadros ya dibujados
+const STATIC_PAD = 8 // la hoja de estática tiene 8 celdas de más: se corre al azar y parece otra
 const OUT_MS = 550 // al irse: la cámara se mete de golpe y todo se vuelve estática
 const IN_MS = 1000 // al llegar: la estática se disuelve y el lente se abre desde plano
 const ENTRY_ZOOM = 0.35
@@ -67,6 +68,10 @@ uniform float uClouds;
 uniform float uRain;
 uniform float uFogW;
 uniform float uFlash;
+// Laberinto: nivel del pasillo, número de la puerta que se abre y cuánto (0 cerrada, 1 abierta)
+uniform float uLevel;
+uniform float uDoor;
+uniform float uOpen;
 
 float hash1(float n) { return fract(sin(n) * 43758.5453); }
 float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -182,6 +187,7 @@ const finishCompile = (gl: GL, scene: Scene3D, prog: WebGLProgram): Program | nu
   const names = [
     "uRes", "uTime", "uRo", "uFw", "uRt", "uUp", "uTan", "uAspect", "uStart", "uFogRef",
     "uSkyTop", "uSkyHor", "uSkyCloud", "uLight", "uStars", "uSunDir", "uLightCol", "uClouds", "uRain", "uFogW", "uFlash",
+    "uLevel", "uDoor", "uOpen",
   ]
   return { prog, u: Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(prog, n)])) }
 }
@@ -194,16 +200,53 @@ const norm = (a: V3): V3 => {
 }
 const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 
+// La puerta que se tiene al lado en el pasillo (para mostrar "entrar")
+export type NearDoor = { door: number; kind: number }
+export type Ascii3DHandle = { open: () => void }
+
 type Props = {
   scene: Scene3D
   controlsClassName?: string // dónde van los controles de zoom (para no chocar con la radio)
   preload?: Scene3D[] // escenas que se preparan de antemano, así el cambio no se traba
+  // Laberinto: dónde se aparece al entrar al pasillo, y un número que cambia en cada viaje
+  // (de un pasillo a otro la escena es la misma, así que el número es lo que avisa que hay que viajar)
+  entry?: Entry
+  visit?: number
+  onNear?: (door: NearDoor | null) => void
+  onEnter?: (kind: number, from: Entry) => void // se cruzó una puerta del pasillo
+  onLeave?: () => void // se llegó al final de una escena que sale (la puerta de arriba de la escalera)
+  // false = montado pero en pausa (mientras se ve el 2D): no dibuja, solo termina de preparar shaders
+  active?: boolean
+  ref?: Ref<Ascii3DHandle>
 }
+
+const OPEN_MS = 1300 // la puerta se abre, la cámara gira y entra
+const CLOSE_MS = 1500 // al llegar: se ve la puerta cerrándose y la cámara vuelve a mirar el pasillo
+const NEAR_M = 1.8 // a cuántos metros de una puerta se la puede abrir
+const PASS_M = 1.6 // cuánto hay que seguir empujando para pasar de largo una puerta con luz
 
 const HOLD_MAX = 2500 // si el shader nuevo no termina en este tiempo, se espera de una
 
-export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6 items-center", preload = [] }: Props) {
+export default function Ascii3D({
+  scene,
+  controlsClassName = "inset-x-0 bottom-6 items-center",
+  preload = [],
+  entry,
+  visit = 0,
+  onNear,
+  onEnter,
+  onLeave,
+  active = true,
+  ref,
+}: Props) {
   const preloadRef = useRef(preload)
+  const activeRef = useRef(active)
+  const wakeRef = useRef(false) // volvió a verse: hay que medir la pantalla de nuevo
+  const wantVisit = useRef({ visit, entry }) // el viaje pedido (se lee junto con la escena)
+  const calls = useRef({ onNear, onEnter, onLeave })
+  const openReq = useRef(false) // se pidió abrir la puerta de al lado
+  const lockRef = useRef(false) // mientras una puerta se abre o se cierra no se camina
+  useImperativeHandle(ref, () => ({ open: () => void (openReq.current = true) }))
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const glowRef = useRef<HTMLCanvasElement>(null)
   const layerRef = useRef<HTMLDivElement>(null)
@@ -215,13 +258,42 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
 
   useEffect(() => {
     wantRef.current = scene
-  }, [scene])
+    wantVisit.current = { visit, entry }
+  }, [scene, visit, entry])
+  useEffect(() => {
+    calls.current = { onNear, onEnter, onLeave }
+  }, [onNear, onEnter, onLeave])
+  useEffect(() => {
+    if (active && !activeRef.current) wakeRef.current = true
+    activeRef.current = active
+  }, [active])
 
   const walkRef = useRef(0) // metros recorridos en las escenas para caminar
+  // Las puertas con luz frenan: al llegar a una, se queda parado frente a ella. Para seguir hay que
+  // empujar un poco más (PASS_M), o volver atrás. held/passed son números de puerta sin dar la vuelta.
+  const stopRef = useRef<{ held: number | null; passed: number | null; push: number; prev: number }>({
+    held: null,
+    passed: null,
+    push: 0,
+    prev: 0,
+  })
   const zoomBy = (d: number) => {
     // En el pasillo la rueda no acerca: camina hacia adelante (o atrás), sin fin
-    if (sceneRef.current.camera.walk) walkRef.current += d * 6
-    else zoomRef.current = clamp(zoomRef.current + d, 0, ZOOM_MAX)
+    if (sceneRef.current.camera.walk) {
+      if (lockRef.current) return
+      const st = stopRef.current
+      if (st.held !== null) {
+        if (d > 0) {
+          st.push += d * 6
+          if (st.push < PASS_M) return
+          walkRef.current += 0.6 // pasa de largo
+        }
+        st.passed = st.held
+        st.held = null
+        if (d > 0) return
+      }
+      walkRef.current += d * 6
+    } else zoomRef.current = clamp(zoomRef.current + d, 0, ZOOM_MAX)
   }
 
   useEffect(() => {
@@ -270,9 +342,8 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
     let preloadAt = performance.now() + 1500
     const warmNext = (now: number) => {
       if (now < preloadAt) return
-      const missing = Array.from({ length: STATIC_FRAMES }, (_, k) => k).find((k) => !statics[k])
-      if (missing !== undefined) {
-        staticFrame(missing)
+      if (!sheet && W > 0) {
+        staticSheet()
         preloadAt = now + 150
         return
       }
@@ -287,31 +358,43 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
         preloadAt = now + 900
       }
     }
-    // Cuadros de estática hechos de antemano (se rehacen si cambia el tamaño)
-    let statics: HTMLCanvasElement[] = []
-    const staticFrame = (k: number) => {
-      if (statics[k]) return statics[k]
+    // Una sola hoja de estática hecha de antemano, un poco más grande que la pantalla. En cada cuadro se
+    // muestra corrida unas celdas al azar: parece estática nueva sin tener que escribirla de nuevo.
+    // (Se rehace si cambia el tamaño.)
+    let sheet: HTMLCanvasElement | null = null
+    const staticSheet = () => {
+      if (sheet) return sheet
+      const kx = canvas.width / W
+      const ky = canvas.height / H
       const sc = document.createElement("canvas")
-      sc.width = canvas.width
-      sc.height = canvas.height
+      sc.width = Math.ceil((W + STATIC_PAD * cw) * kx)
+      sc.height = Math.ceil((H + STATIC_PAD * lh) * ky)
       const sx = sc.getContext("2d")!
-      sx.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0)
+      sx.setTransform(kx, 0, 0, ky, 0, 0)
       sx.font = ctx.font
       sx.textBaseline = "top"
       for (let tone = 0; tone < STATIC_TONES.length; tone++) {
         sx.fillStyle = STATIC_TONES[tone]
-        for (let r = 0; r < rows; r++) {
+        for (let r = 0; r < rows + STATIC_PAD; r++) {
           let line = ""
-          for (let c = 0; c < cols; c++) {
-            const h = hash(c * 7 + k * 101, r * 3 + k * 37)
-            line += Math.floor(h * STATIC_TONES.length) === tone ? ramp(RAMP, hash(c + k * 53, r * 11 + k)) : " "
+          for (let c = 0; c < cols + STATIC_PAD; c++) {
+            line += Math.floor(hash(c * 7, r * 3) * STATIC_TONES.length) === tone ? ramp(RAMP, hash(c, r * 11)) : " "
           }
           sx.fillText(line, 0, r * lh)
         }
       }
-      statics[k] = sc
+      sheet = sc
       hitch = true
       return sc
+    }
+    const drawStatic = (amount: number, tick: number) => {
+      if (W <= 0) return
+      const sh = staticSheet()
+      const ox = Math.floor(hash(tick, 3) * STATIC_PAD) * cw * (canvas.width / W)
+      const oy = Math.floor(hash(tick, 9) * STATIC_PAD) * lh * (canvas.height / H)
+      ctx.globalAlpha = Math.min(1, amount)
+      ctx.drawImage(sh, ox, oy, canvas.width, canvas.height, 0, 0, W, H)
+      ctx.globalAlpha = 1
     }
     const liveSky = createLiveSky()
 
@@ -337,6 +420,32 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
     // Transición: "out" se mete en la escena actual, "in" aparece la nueva desde plano
     let phase: { kind: "in" | "out" | "none"; at: number } = { kind: "in", at: performance.now() }
     zoomRef.current = ENTRY_ZOOM
+    // Laberinto
+    let level = wantVisit.current.entry?.level ?? 0
+    let shownVisit = wantVisit.current.visit
+    let door: { n: number; side: number; kind: number; type: "open" | "close"; at: number; fired: boolean } | null = null
+    let nearKey = ""
+    let exited = false // ya se salió por el final (escalera)
+    const report = (d: NearDoor | null) => {
+      const key = d ? `${level}:${d.door}` : ""
+      if (key === nearKey) return
+      nearKey = key
+      calls.current.onNear?.(d)
+    }
+    const arrive = (now: number, sc: Scene3D) => {
+      const e = wantVisit.current.entry
+      level = e?.level ?? 0
+      exited = false
+      door = null
+      if (sc.camera.walk?.start) walk = walkRef.current = sc.camera.walk.start
+      stopRef.current = { held: null, passed: null, push: 0, prev: walk }
+      if (sc.camera.walk && sc.camera.doors && e) {
+        // Se aparece justo frente a la puerta por la que se vuelve, mirándola mientras se cierra
+        walk = walkRef.current = e.door * DOOR_GAP
+        stopRef.current = { held: null, passed: e.door, push: 0, prev: walk } // esa no frena al salir
+        door = { n: e.door, side: sideOf(e.door), kind: kindAt(level, e.door), type: "close", at: now, fired: false }
+      }
+    }
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
     const start = performance.now()
 
@@ -367,12 +476,13 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
       off.width = cols
       off.height = rows
       pixels = new Uint8Array(cols * rows * 4)
-      statics = []
+      sheet = null
     }
 
     const draw = (now: number) => {
       const t = (now - start) / 1000
-      if (wantRef.current.id !== sceneRef.current.id && phase.kind !== "out") {
+      const traveling = wantRef.current.id !== sceneRef.current.id || wantVisit.current.visit !== shownVisit
+      if (traveling && phase.kind !== "out") {
         // Si se pide otra escena mientras la anterior todavía aparece, la estática sigue desde
         // donde estaba en vez de volver a cero (antes se veía un destello de la escena limpia)
         const left = phase.kind === "in" ? 1 - clamp((now - phase.at) / IN_MS, 0, 1) : 0
@@ -388,7 +498,7 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
         // y mientras tanto la estática queda llena en vez de congelar la página
         const nextScene = wantRef.current
         request(nextScene)
-        if (p >= 1 && nextScene.id === sceneRef.current.id) phase = { kind: "in", at: now } // se arrepintió: vuelve
+        if (p >= 1 && !traveling) phase = { kind: "in", at: now } // se arrepintió: vuelve
         else if (p >= 1 && ready(nextScene, now - phase.at > HOLD_MAX || !parallel)) {
           sceneRef.current = nextScene
           // La escena nueva cuesta distinto: la calidad automática empieza a medir de cero
@@ -401,6 +511,9 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
           zoomRef.current = ENTRY_ZOOM
           walk = 0
           walkRef.current = 0
+          shownVisit = wantVisit.current.visit
+          report(null)
+          arrive(now, nextScene)
           phase = { kind: "in", at: now }
         }
       } else if (phase.kind === "in") {
@@ -410,7 +523,14 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
       } else warmNext(now)
       const sc = sceneRef.current
       const cam = sc.camera
-      ready(sc, true)
+      // La primera escena: con compilación en paralelo no se congela la página esperándola,
+      // se muestra estática hasta que esté (y la entrada empieza recién ahí)
+      if (!ready(sc, !parallel || now - start > HOLD_MAX)) {
+        ctx.clearRect(0, 0, W, H)
+        drawStatic(1, Math.floor(now / 50))
+        if (phase.kind === "in") phase.at = now
+        return
+      }
       const program = programs.get(sc.id)
       if (!program) return
 
@@ -430,24 +550,84 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
       let ro: V3
       let fw: V3
       let walkTan = tan
+      let ax = 0 // corrimiento de costado: entrar por una puerta
+      let face = a
+      let open = 0
       if (cam.walk) {
-        // Primera persona: se avanza solo, despacito, y la rueda empuja; al salir se corre hacia adelante
-        if (!reduced) walkRef.current += cam.walk.drift / FPS
-        walk += (walkRef.current - walk) * 0.08
         const L = cam.walk.loop
+        // Laberinto: la puerta de al lado, abrirla, y la animación de abrir o cerrar
+        if (cam.doors) {
+          // ¿Se cruzó una puerta con luz desde el cuadro anterior? Entonces frena ahí
+          const st = stopRef.current
+          const target = walkRef.current
+          if (st.passed !== null && Math.abs(target - st.passed * DOOR_GAP) > 3) st.passed = null
+          if (st.held === null && !door && phase.kind === "none" && target > st.prev) {
+            for (let c = Math.ceil(st.prev / DOOR_GAP); c * DOOR_GAP <= target; c++) {
+              if (c !== st.passed && kindAt(level, c) > 0) {
+                st.held = c
+                st.push = 0
+                walkRef.current = c * DOOR_GAP
+                break
+              }
+            }
+          }
+          st.prev = walkRef.current
+          const n0 = st.held ?? Math.round(walk / DOOR_GAP)
+          const n = ((n0 % DOORS) + DOORS) % DOORS
+          const kind = kindAt(level, n)
+          const near = !door && phase.kind === "none" && Math.abs(walk - n0 * DOOR_GAP) < NEAR_M && kind > 0
+          report(near ? { door: n, kind } : null)
+          if (openReq.current && near) door = { n, side: sideOf(n), kind, type: "open", at: now, fired: false }
+          openReq.current = false
+          if (door) {
+            const ease = (x: number) => x * x * (3 - 2 * x)
+            const toDoor = -door.side * Math.PI * 0.5 // girar para mirar la puerta
+            if (door.type === "open") {
+              const p = clamp((now - door.at) / OPEN_MS, 0, 1)
+              open = ease(clamp(p * 1.4, 0, 1))
+              face = a + (toDoor - a) * ease(clamp(p * 2, 0, 1))
+              ax = door.side * ease(clamp((p - 0.45) / 0.55, 0, 1)) * 1.5 + door.side * rush * 2
+              walkRef.current = walk = walk + (Math.round(walk / DOOR_GAP) * DOOR_GAP - walk) * 0.2
+              if (p >= 1 && !door.fired) {
+                door.fired = true
+                calls.current.onEnter?.(door.kind, { level, door: door.n })
+              }
+            } else {
+              const p = clamp((now - door.at - IN_MS * 0.4) / CLOSE_MS, 0, 1)
+              open = 1 - ease(p)
+              face = toDoor + (a - toDoor) * ease(clamp((p - 0.2) / 0.8, 0, 1))
+              if (p >= 1) door = null
+            }
+          }
+        }
+        // Solo se deja de caminar mientras una puerta del pasillo se abre o se cierra
+        lockRef.current = !!cam.doors && !!door
+        // Primera persona: se avanza solo, despacito, y la rueda empuja; cerca de una puerta con luz se frena
+        // Frente a una puerta con luz se queda quieto, esperando
+        if (!reduced && !lockRef.current && stopRef.current.held === null) walkRef.current += cam.walk.drift / FPS
+        walk += (walkRef.current - walk) * 0.08
         // Al salir se empuja un poco hacia adelante (antes eran 27 m: en la escalera daba varias vueltas y parpadeaba)
-        const along = ((((walk + rush * 3) % L) + L) % L)
+        let along = ((((walk + rush * 3) % L) + L) % L)
+        if (cam.walk.exit) {
+          // Esta escena no da la vuelta: al llegar a la puerta del final se sale
+          walkRef.current = clamp(walkRef.current, 0, L)
+          along = clamp(walk + rush * 3, 0, L - 0.01)
+          if (walk > L - 0.3 && !exited) {
+            exited = true
+            calls.current.onLeave?.()
+          }
+        }
         const bob = reduced ? 0 : Math.sin(walk * 2.2) * 0.025
         // En la escalera se sube: la altura sigue a los escalones
         const climb = cam.walk.climb
         const lift = climb ? clamp(along / climb.run, 0, climb.steps) * climb.rise : 0
-        ro = [cam.target[0] + Math.sin(walk * 1.1) * 0.04, cam.target[1] + lift + bob, cam.target[2] - along]
+        ro = [cam.target[0] + Math.sin(walk * 1.1) * 0.04 + ax, cam.target[1] + lift + bob, cam.target[2] - along]
         // Al cruzar el final (la puerta) todo se vuelve estática y se reaparece al principio
         if (cam.walk.flash) {
           const f = cam.walk.flash
           staticAmt = Math.max(staticAmt, clamp((along - (L - f)) / f, 0, 1), clamp(1 - along / f, 0, 1))
         }
-        fw = norm([-Math.sin(a) * Math.cos(pitch), -Math.sin(pitch), -Math.cos(a) * Math.cos(pitch)])
+        fw = norm([-Math.sin(face) * Math.cos(pitch), -Math.sin(pitch), -Math.cos(face) * Math.cos(pitch)])
         walkTan = Math.tan((cam.walk.fov * Math.PI) / 360)
       } else {
         ro = [
@@ -489,6 +669,9 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
       gl.uniform1f(u.uRain, wea.rain)
       gl.uniform1f(u.uFogW, wea.fog)
       gl.uniform1f(u.uFlash, sky.flash)
+      gl.uniform1f(u.uLevel, level)
+      gl.uniform1f(u.uDoor, door ? door.n : -1)
+      gl.uniform1f(u.uOpen, open)
       gl.drawArrays(gl.TRIANGLES, 0, 3)
       gl.readPixels(0, 0, cols, rows, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
 
@@ -559,11 +742,7 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
           } else run += ch
         }
       }
-      if (staticAmt > 0) {
-        ctx.globalAlpha = Math.min(1, staticAmt * 1.1)
-        ctx.drawImage(staticFrame(tick % STATIC_FRAMES), 0, 0, W, H)
-        ctx.globalAlpha = 1
-      }
+      if (staticAmt > 0) drawStatic(staticAmt * 1.1, tick)
       // Lluvia por delante, solo en los espacios abiertos
       if (sc.outdoor && wea.rain > 0.02 && staticAmt < 0.5) {
         const drops = Math.floor(cols * rows * 0.012 * wea.rain)
@@ -585,6 +764,24 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
     }
 
     const loop = (now: number) => {
+      frame = requestAnimationFrame(loop)
+      if (!activeRef.current) {
+        // En pausa: no se dibuja nada; con compilación en paralelo se siguen preparando las escenas
+        if (parallel && now >= preloadAt) {
+          preloadRef.current.forEach((s) => ready(s, false))
+          preloadAt = now + 500
+        }
+        return
+      }
+      if (wakeRef.current) {
+        // Volvió a verse: medir de nuevo (oculto mide cero) y aparecer desde la estática
+        wakeRef.current = false
+        // Solo se vuelve a medir si la pantalla cambió mientras estaba oculto (si no, la estática sirve)
+        if (canvas.clientWidth !== W || canvas.clientHeight !== H) resize()
+        phase = { kind: "in", at: now }
+        cost = 0
+        costAt = now
+      }
       if (now - last >= 1000 / FPS) {
         const t0 = performance.now()
         hitch = false
@@ -605,7 +802,6 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
         }
         last = now
       }
-      frame = requestAnimationFrame(loop)
     }
 
     // --- Controles: arrastrar para mirar, rueda o pinza para entrar ---
@@ -619,7 +815,9 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
       v.pitch = clamp(v.pitch + dy * 0.004, cam.pitchRange[0], cam.pitchRange[1])
     }
     const onDown = (e: PointerEvent) => {
-      layer.setPointerCapture(e.pointerId)
+      try {
+        layer.setPointerCapture(e.pointerId)
+      } catch {} // algunos navegadores no dejan capturar: el gesto sigue igual
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
     }
     const onMove = (e: PointerEvent) => {
@@ -634,7 +832,12 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
         pinch = d
         return
       }
-      look(e.clientX - p.x, e.clientY - p.y)
+      // En el celular, en las escenas para caminar, deslizar el dedo es como hacer scroll:
+      // hacia arriba se avanza, hacia abajo se retrocede, y de costado se mira
+      if (e.pointerType === "touch" && sceneRef.current.camera.walk) {
+        zoomBy(-(e.clientY - p.y) * 0.005)
+        look(e.clientX - p.x, 0)
+      } else look(e.clientX - p.x, e.clientY - p.y)
       p.x = e.clientX
       p.y = e.clientY
     }
@@ -647,13 +850,14 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
       zoomBy(-e.deltaY * 0.0012)
     }
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return
+      if (!activeRef.current || e.target instanceof HTMLInputElement) return
       if (e.key === "+" || e.key === "=") zoomBy(0.12)
       else if (e.key === "-") zoomBy(-0.12)
       else if (e.key === "ArrowLeft") look(-40, 0)
       else if (e.key === "ArrowRight") look(40, 0)
       else if (e.key === "ArrowUp") look(0, -30)
       else if (e.key === "ArrowDown") look(0, 30)
+      else if (e.key === "e" || e.key === "E" || e.key === "Enter") openReq.current = true
     }
     layer.addEventListener("pointerdown", onDown)
     layer.addEventListener("pointermove", onMove)
@@ -702,7 +906,11 @@ export default function Ascii3D({ scene, controlsClassName = "inset-x-0 bottom-6
           </button>
         </div>
         <p className="hidden font-mono text-[10px] lowercase tracking-[0.15em] text-white/45 sm:block">
-          {scene.camera.walk ? "arrastrá para mirar · rueda para caminar" : "arrastrá para mirar · rueda para entrar"}
+          {scene.camera.doors
+            ? "scrollea o usa la rueda del mouse para moverte · las puertas con luz se abren (E)"
+            : scene.camera.walk
+              ? "scrollea o usa la rueda del mouse para moverte"
+              : "scrollea o usa la rueda del mouse para acercarte"}
         </p>
       </div>
     </>

@@ -29,7 +29,10 @@ export type Scene3D = {
       fov: number
       climb?: { run: number; rise: number; steps: number } // escalones: fondo, alto y cantidad
       flash?: number // metros de estática antes y después de volver al principio
+      exit?: boolean // al llegar al final no se vuelve al principio: se sale (la puerta de arriba)
+      start?: number // metros desde donde se arranca al llegar
     }
+    doors?: boolean // el pasillo del laberinto: sus puertas llevan a otras escenas (maze.ts)
     yawRange?: [number, number]
     pitchRange: [number, number]
   }
@@ -70,19 +73,63 @@ vec4 eyePair(float i, float kind) {
   return vec4((hash1(k * 5.3) - 0.5) * 2.4, 0.9 + hash1(k * 2.9) * 1.3, -hash1(k * 7.7) * 3.0, 0.12);
 }
 
+// --- El laberinto (misma cuenta que maze.ts) ---
+// Número de puerta en esta parte del pasillo: la 0 está en z = 0 y se avanza hacia -z
+float doorIdx(float z) { return mod(floor((-z + 3.0) / 6.0), 100.0); }
+// 0 cerrada, 1 isla, 2 cementerio, 3 escalera, 4 otro pasillo
+float doorKind(float n) {
+  if (n < 0.5) return 0.0;
+  float i = mod(n + uLevel * 3.0, 8.0);
+  if (abs(i - 1.0) < 0.5) return 1.0;
+  if (abs(i - 4.0) < 0.5) return 2.0;
+  if (abs(i - 6.0) < 0.5) return 4.0;
+  if (abs(i - 7.0) < 0.5) return 3.0;
+  return 0.0;
+}
+// La luz que se escapa por debajo de cada puerta dice adónde lleva
+vec3 kindColor(float k) {
+  if (k < 0.5) return vec3(0.0);
+  if (k < 1.5) return vec3(0.25, 1.0, 1.0); // isla: turquesa
+  if (k < 2.5) return vec3(1.0, 0.45, 0.08); // cementerio: velas
+  if (k < 3.5) return vec3(1.0, 0.97, 0.9); // escalera: nubes
+  return vec3(1.0, 0.12, 0.08); // otro pasillo: rojo
+}
+// La luz de los tubos cambia con el nivel: amarillo, rojo de emergencia, verde enfermizo
+vec3 levelLight() {
+  if (uLevel < 0.5) return vec3(1.0, 0.93, 0.72);
+  if (uLevel < 1.5) return vec3(1.35, 0.6, 0.5);
+  return vec3(0.75, 1.15, 0.85);
+}
+// Y el pasillo entero se tiñe: empapelado, alfombra y penumbra
+vec3 levelTint() {
+  if (uLevel < 0.5) return vec3(1.0);
+  if (uLevel < 1.5) return vec3(1.1, 0.62, 0.55);
+  return vec3(0.75, 1.05, 0.78);
+}
+// La puerta que se está abriendo (o cerrando detrás de quien llega)
+bool isOpen(float n) { return uOpen > 0.001 && abs(n - uDoor) < 0.5; }
+
 vec2 map(vec3 p) {
   float zc = mod(p.z + 3.0, 6.0) - 3.0;
   float side = mod(floor((p.z + 3.0) / 6.0), 2.0) < 0.5 ? 1.0 : -1.0;
+  bool open = isOpen(doorIdx(p.z));
   // Hueco del marco de cada puerta, alternando de lado
   float hole = sdBox(vec3(p.x - side * 1.75, p.y - 1.05, zc), vec3(0.14, 1.07, 0.52));
+  // Detrás de la puerta abierta hay un hueco hondo lleno de luz
+  if (open) hole = min(hole, sdBox(vec3(p.x - side * 2.9, p.y - 1.05, zc), vec3(1.2, 1.07, 0.5)));
   vec2 r = vec2(p.y, 1.0);
   float wall = max(1.7 - abs(p.x), -hole);
   // Zócalo
   wall = min(wall, max(1.62 - abs(p.x), p.y - 0.12));
   r = opU(r, vec2(wall, 2.0));
   r = opU(r, vec2(2.9 - p.y, 3.0));
-  // Puerta cerrada, con manija
+  // Puerta, con manija; la abierta gira sobre la bisagra hacia afuera
   vec3 dp = vec3(p.x - side * 1.84, p.y - 1.03, zc);
+  if (open) {
+    float a = side * uOpen * 1.45;
+    vec2 h = mat2(cos(a), -sin(a), sin(a), cos(a)) * vec2(dp.x, dp.z - 0.46);
+    dp = vec3(h.x, dp.y, h.y + 0.46);
+  }
   r = opU(r, vec2(sdBox(dp, vec3(0.03, 1.0, 0.46)), 4.0));
   r = opU(r, vec2(length(dp - vec3(-side * 0.05, 0.0, 0.32)) - 0.045, 6.0));
   // Cartelito encendido sobre cada puerta
@@ -139,7 +186,7 @@ vec3 glow(vec3 rd, float t) {
 
 // El fondo se pierde en una penumbra marrón: el pasillo se traga la luz
 vec3 sky(vec3 rd) {
-  return vec3(0.1, 0.075, 0.04);
+  return vec3(0.1, 0.075, 0.04) * levelTint();
 }
 
 // Algunos tubos parpadean (el patrón se repite con el pasillo, así el loop no se nota)
@@ -158,18 +205,31 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) {
   // Casi sin luz de ambiente: solo se ve lo que está debajo de un tubo
   float near = 1.4 / (1.0 + dot(d, d) * 0.6);
   float dif = max(dot(n, L), 0.0);
-  vec3 light = vec3(1.0, 0.93, 0.72) * (0.2 + near * (0.5 + 0.8 * dif)) * lmp;
+  vec3 light = levelLight() * (0.2 + near * (0.5 + 0.8 * dif)) * lmp;
+  // La puerta de al lado: de qué color es su luz y cuánto llega hasta acá
+  float dn = doorIdx(p.z);
+  float dside = mod(dn, 2.0) < 0.5 ? 1.0 : -1.0;
+  float zc = mod(p.z + 3.0, 6.0) - 3.0;
+  vec3 kc = kindColor(doorKind(dn));
+  // Al abrirse, la luz del otro lado inunda el pasillo
+  if (isOpen(dn)) {
+    vec3 dd = p - vec3(dside * 1.8, 1.0, -dn * 6.0);
+    light += kc * uOpen * 2.2 / (1.0 + dot(dd, dd) * 0.5);
+  }
+  if (m < 2.5 && abs(p.x) > 1.92) return kc * 1.8 + 0.3; // el fondo del hueco: pura luz
   if (m < 1.5) {
     // Alfombra mostaza gastada, más oscura junto a las paredes
     float worn = 0.85 + 0.3 * noise2(p.xz * 7.0) - smoothstep(1.0, 1.7, abs(p.x)) * 0.25;
-    return vec3(0.62, 0.52, 0.2) * worn * light * ao;
+    // Raya de luz que sale por debajo de las puertas que llevan a algún lado
+    float under = exp(-max(0.0, 1.7 - p.x * dside) * 3.5) * smoothstep(0.62, 0.4, abs(zc));
+    return vec3(0.62, 0.52, 0.2) * levelTint() * worn * light * ao + kc * under * 0.9;
   }
   if (m < 2.5) {
     // Empapelado amarillo con rayas finas y una mancha de humedad cada tanto
     if (p.y < 0.13) return vec3(0.35, 0.28, 0.16) * light;
     float stripe = 0.88 + 0.12 * step(0.5, fract(p.z * 4.0));
     float damp = smoothstep(0.65, 0.85, noise2(p.zy * vec2(0.6, 1.1) + 13.0)) * 0.3;
-    return vec3(0.9, 0.8, 0.42) * stripe * (1.0 - damp) * light * (0.4 + 0.6 * ao);
+    return vec3(0.9, 0.8, 0.42) * levelTint() * stripe * (1.0 - damp) * light * (0.4 + 0.6 * ao);
   }
   if (m < 3.5) {
     vec2 f = fract(p.xz * vec2(1.6, 1.0));
@@ -181,12 +241,12 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) {
     float zc = mod(p.z + 3.0, 6.0) - 3.0;
     vec2 q = vec2(abs(zc) - 0.2, abs(p.y - 1.03 + 0.1) - 0.45);
     float panel = step(max(abs(q.x) - 0.13, abs(q.y) - 0.35), 0.0);
-    return vec3(0.5, 0.3, 0.16) * (1.0 - panel * 0.3) * light * (0.5 + 0.5 * ao);
+    return vec3(0.5, 0.3, 0.16) * (1.0 - panel * 0.3) * light * (0.5 + 0.5 * ao) + kc * 0.12;
   }
-  if (m < 5.5) return vec3(1.3, 1.26, 1.05) * lamp(idx);
+  if (m < 5.5) return levelLight() * 1.3 * lamp(idx);
   if (m < 6.5) return vec3(0.9, 0.75, 0.35) * light + 0.15;
-  // Cartel verde de salida que nunca lleva a ningún lado
-  if (m < 7.5) return vec3(0.25, 1.1, 0.45);
+  // Cartelito sobre la puerta: apagado si está cerrada, del color de su destino si abre
+  if (m < 7.5) return doorKind(dn) < 0.5 ? vec3(0.12, 0.14, 0.12) : kc * 1.3;
   // El demonio: negro, con un borde rojizo apenas
   if (m < 8.5) return vec3(0.02, 0.01, 0.015) + vec3(0.9, 0.2, 0.15) * pow(1.0 - max(dot(-rd, n), 0.0), 3.0) * 0.5;
   // Ojos: rojo puro, para que el ASCII los pinte rojos
@@ -280,6 +340,8 @@ vec2 palm(vec3 p, vec2 lean, float h, float ph) {
 }
 
 const vec3 TV = vec3(0.7, 1.05, 0.9);
+// La puerta de vuelta al pasillo: parada sola en la arena, con la luz amarilla del pasillo adentro
+const vec3 DOOR = vec3(2.1, 0.45, 1.3);
 
 vec2 map(vec3 p) {
   vec2 r = vec2(sea(p), 1.0);
@@ -292,6 +354,11 @@ vec2 map(vec3 p) {
   r = opU(r, palm(p - vec3(-0.9, 0.55, -2.0), vec2(0.3, -0.4), 3.7, 1.7));
   r = opU(r, palm(p - vec3(2.6, 0.35, -1.0), vec2(0.7, 0.1), 2.7, 3.1));
   r = opU(r, vec2(sdBox(p - TV, vec3(0.55, 0.42, 0.4)) - 0.04, 5.0));
+  vec3 dq = p - DOOR;
+  dq.xz = mat2(0.8, 0.6, -0.6, 0.8) * dq.xz; // un poco girada hacia la cámara
+  float jambs = min(sdBox(vec3(abs(dq.x) - 0.5, dq.y - 0.8, dq.z), vec3(0.07, 0.8, 0.07)), sdBox(dq - vec3(0.0, 1.62, 0.0), vec3(0.57, 0.07, 0.07)));
+  r = opU(r, vec2(jambs, 6.0));
+  r = opU(r, vec2(sdBox(dq - vec3(0.0, 0.8, 0.0), vec3(0.43, 0.78, 0.015)), 7.0));
   return r;
 }
 
@@ -336,13 +403,18 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) {
   }
   if (m < 3.5) return vec3(0.55, 0.36, 0.25) * lit + glow * 0.8;
   if (m < 4.5) return vec3(0.18, 0.62, 0.42) * lit + glow;
-  // La tele: la pantalla mira hacia adelante y muestra estática
-  vec3 lp = p - TV;
-  if (n.z > 0.7 && abs(lp.x) < 0.42 && abs(lp.y) < 0.3) {
-    float s = hash2(floor(lp.xy * 28.0) + floor(uTime * 12.0) * 7.0);
-    return vec3(0.55, 0.95, 1.0) * (0.35 + s * 1.0);
+  if (m < 5.5) {
+    // La tele: la pantalla mira hacia adelante y muestra estática
+    vec3 lp = p - TV;
+    if (n.z > 0.7 && abs(lp.x) < 0.42 && abs(lp.y) < 0.3) {
+      float s = hash2(floor(lp.xy * 28.0) + floor(uTime * 12.0) * 7.0);
+      return vec3(0.55, 0.95, 1.0) * (0.35 + s * 1.0);
+    }
+    return vec3(0.42, 0.36, 0.48) * lit + glow * 0.8;
   }
-  return vec3(0.42, 0.36, 0.48) * lit + glow * 0.8;
+  if (m < 6.5) return vec3(0.85, 0.8, 0.62) * lit + glow * 0.6; // marco de la puerta
+  // Adentro de la puerta: el pasillo, que titila un poco
+  return vec3(1.25, 1.1, 0.6) * (0.85 + 0.15 * step(0.3, fract(sin(floor(uTime * 7.0)) * 43758.5)));
 }
 `
 
@@ -511,11 +583,11 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) {
     return c * (1.0 - joint * 0.4) * lit;
   }
   if (m < 4.5) {
-    // Por la puerta entreabierta: estática verde y, a veces, dos ojos
+    // Por la puerta de la cripta se vuelve al pasillo: sale su luz amarilla, con estática y, a veces, dos ojos
     vec2 q = p.xy - vec2(0.0, 1.32);
     float eyes = step(length(vec2(abs(q.x) - 0.09, q.y)), 0.035) * step(0.1, sin(uTime * 0.7));
     float s = hash2(floor(p.xy * 30.0) + floor(uTime * 12.0) * 7.0);
-    return mix(vec3(0.1, 0.8, 0.35) * (0.2 + s * 0.8), vec3(0.95, 1.0, 0.45) * 1.4, eyes);
+    return mix(vec3(1.15, 1.0, 0.5) * (0.55 + s * 0.45), vec3(1.4, 0.15, 0.08), eyes);
   }
   if (m < 5.5) {
     // Lápida de mármol: una cruz grabada en el frente
@@ -542,7 +614,7 @@ export const SCENES_3D: Scene3D[] = [
     id: "pasillo",
     name: "pasillo",
     label: "el pasillo",
-    blurb: "espacio 01 · todas las puertas están cerradas",
+    blurb: "espacio 01 · casi todas las puertas están cerradas",
     glsl: hallway,
     exposure: 1.4,
     saturation: 0.8,
@@ -556,13 +628,14 @@ export const SCENES_3D: Scene3D[] = [
       yawRange: [-0.6, 0.6],
       pitchRange: [-0.3, 0.3],
       walk: { drift: 0.35, loop: 600, fov: 72 },
+      doors: true,
     },
   },
   {
     id: "escalera",
     name: "escalera",
     label: "la escalera",
-    blurb: "espacio 02 · subís y volvés a empezar",
+    blurb: "espacio 02 · subes y la puerta de arriba te devuelve al pasillo",
     glsl: stairs,
     exposure: 1.5,
     outdoor: true,
@@ -575,7 +648,7 @@ export const SCENES_3D: Scene3D[] = [
       clip: 1e4,
       yawRange: [-0.7, 0.7],
       pitchRange: [-0.5, 0.35],
-      walk: { drift: 0.3, loop: 9.4, fov: 70, climb: { run: 0.6, rise: 0.32, steps: 14 }, flash: 0.5 },
+      walk: { drift: 0.3, loop: 9.4, fov: 70, climb: { run: 0.6, rise: 0.32, steps: 14 }, flash: 0.5, exit: true, start: 0.6 },
     },
   },
   {
