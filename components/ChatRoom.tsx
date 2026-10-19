@@ -4,22 +4,26 @@ import { useEffect, useRef, useState, type FormEvent } from "react"
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js"
 import PixelIcon from "./PixelIcon"
 
-// Chat anónimo y efímero: nada se guarda en ningún lado.
-// Los mensajes viajan en vivo por Supabase Realtime (Broadcast, sin base de datos). Cada persona cae
-// sola en la primera sala con lugar (hasta 50, contadas con Presence) sin que se note, hay modo lento
-// de 5 s, y cada mensaje se desvanece y desaparece a los 2 minutos.
-const ROOM_SIZE = 50
-const MAX_ROOMS = 20
+// Chat a modo de foro: los mensajes quedan guardados en Supabase (tabla chat_messages, ver supabase/foro.sql)
+// y quien entra ve lo último que se dijo. Cada dispositivo tiene una sesión anónima que no vence.
+// Pensado para el plan gratis:
+//   · los mensajes nuevos llegan en vivo por un canal privado que alimenta la base misma, al guardar
+//   · no hay lista de "en línea" (Presence gasta mucha cuota de mensajes en vivo)
+//   · solo se conecta con la ventana abierta, y se desconecta si la pestaña queda oculta un minuto
+//   · el modo lento y los topes diarios los controla el servidor
+const TOPIC = "foro"
+const PAGE = 50 // mensajes por tanda al abrir y al pedir anteriores
+const MAX_SHOWN = 500
 const SLOW_MS = 5000
-const MESSAGE_TTL = 2 * 60 * 1000
-const FADE_LAST = 30 * 1000 // los últimos 30 s se va apagando
-const MAX_MESSAGES = 30
+const HIDDEN_MS = 60 * 1000
 const MAX_LEN = 200
 export const NICK_LEN = 16
 const COLORS = ["#ffd600", "#5cff8a", "#ff9a3c", "#7ad7ff", "#ff6fb5", "#c79bff"]
+const FIELDS = "id,nick,body,created_at"
 
-type Msg = { id: string; nick: string; text: string; at: number }
-type Status = "connecting" | "online" | "full" | "error"
+type Msg = { id: number; nick: string; text: string; at: number }
+type Row = { id: number; nick: string; body: string; created_at: string }
+type Status = "connecting" | "online" | "error"
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
@@ -31,7 +35,8 @@ let leaving: Promise<unknown> = Promise.resolve()
 const getClient = () => {
   if (!SUPABASE_URL || !SUPABASE_KEY) return null
   client ??= createClient(SUPABASE_URL, SUPABASE_KEY, {
-    auth: { persistSession: false },
+    // La sesión anónima se guarda en el dispositivo y se renueva sola: dura mientras no se borren los datos
+    auth: { persistSession: true, autoRefreshToken: true, storageKey: "ts-foro-auth" },
     realtime: { params: { eventsPerSecond: 5 } },
   })
   return client
@@ -41,16 +46,32 @@ export const cleanNick = (s: string) => s.replace(/[^\p{L}\p{N}_.-]/gu, "").slic
 
 const cleanText = (s: string) =>
   s
-    .replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e]/g, " ")
+    .replace(/[\u0000-\u001f\u007f​-‏‪-‮]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, MAX_LEN)
 
-// crypto.randomUUID solo existe en HTTPS o localhost (no al probar desde el celular por la IP local)
-const randomId = () =>
-  typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
+const toMsg = (r: Row): Msg => ({
+  id: Number(r.id),
+  nick: cleanNick(String(r.nick ?? "")),
+  text: cleanText(String(r.body ?? "")),
+  at: Date.parse(String(r.created_at)) || Date.now(),
+})
+
+// Junta mensajes sin repetir (el propio llega dos veces: al guardarlo y por el canal) y en orden
+const merge = (prev: Msg[], add: Msg[]) => {
+  const byId = new Map(prev.map((m) => [m.id, m]))
+  for (const m of add) if (m.id && m.text && m.nick) byId.set(m.id, m)
+  return [...byId.values()].sort((a, b) => a.id - b.id)
+}
+
+// Los errores que manda el servidor (supabase/foro.sql), en palabras
+const reason = (message: string) => {
+  if (message.includes("modo_lento")) return "modo lento: esperá unos segundos"
+  if (message.includes("limite_diario")) return "llegaste al límite de mensajes de hoy"
+  if (message.includes("foro_saturado")) return "el foro está saturado, probá en un rato"
+  return "no se pudo enviar"
+}
 
 const colorOf = (nick: string) => {
   let h = 0
@@ -58,121 +79,116 @@ const colorOf = (nick: string) => {
   return COLORS[Math.abs(h) % COLORS.length]
 }
 
+// Hora si es de hoy; si no, el día
+const when = (at: number) => {
+  const d = new Date(at)
+  const today = new Date().toDateString() === d.toDateString()
+  return today
+    ? d.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString("es", { day: "2-digit", month: "2-digit" })
+}
+
 export default function ChatRoom({ nick }: { nick: string }) {
   const [open, setOpen] = useState(false)
+  const [visible, setVisible] = useState(true)
   const [status, setStatus] = useState<Status>("connecting")
   const [attempt, setAttempt] = useState(0)
-  const [users, setUsers] = useState(0)
   const [messages, setMessages] = useState<Msg[]>([])
+  const [hasOlder, setHasOlder] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const [text, setText] = useState("")
+  const [notice, setNotice] = useState("")
   const [now, setNow] = useState(0)
   const [cooldownUntil, setCooldownUntil] = useState(0)
-  const channelRef = useRef<RealtimeChannel | null>(null)
-  const meRef = useRef("")
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const keepScroll = useRef<number | null>(null) // al cargar anteriores, no saltar al final
 
-  // Conexión solo mientras la ventana está abierta y hay nombre
+  // Pestaña oculta más de un minuto: se suelta la conexión (no gasta cuota) y al volver se retoma
+  useEffect(() => {
+    let timer = 0
+    const onVis = () => {
+      clearTimeout(timer)
+      if (document.hidden) timer = window.setTimeout(() => setVisible(false), HIDDEN_MS)
+      else setVisible(true)
+    }
+    document.addEventListener("visibilitychange", onVis)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener("visibilitychange", onVis)
+    }
+  }, [])
+
+  // Conexión: sesión anónima, canal en vivo y los últimos mensajes guardados
   useEffect(() => {
     const supabase = getClient()
-    if (!open || !nick || !supabase) return
+    if (!open || !nick || !visible || !supabase) return
 
-    const me = randomId()
-    meRef.current = me
     let stopped = false
-    let current: RealtimeChannel | null = null
-    // Quién está en la sala (clave de Presence -> nombre) y cuándo habló cada uno por última vez
-    let members = new Map<string, string>()
-    const lastFrom = new Map<string, number>()
+    let channel: RealtimeChannel | null = null
 
-    // Prueba las salas en orden: la primera donde estemos entre los primeros ROOM_SIZE es la nuestra
-    const tryRoom = (i: number) => {
-      if (stopped) return
-      if (i >= MAX_ROOMS) {
-        setStatus("full")
-        return
+    const start = async () => {
+      setStatus("connecting")
+      await leaving
+      const { data: auth } = await supabase.auth.getSession()
+      if (!auth.session) {
+        const { error } = await supabase.auth.signInAnonymously()
+        if (error) throw error
       }
-      const joinedAt = Date.now()
-      let placed = false
-      const channel = supabase.channel(`tropical-chat-${i}`, {
-        config: { broadcast: { self: true }, presence: { key: me } },
-      })
-      current = channel
+      if (stopped) return
+      await supabase.realtime.setAuth()
 
-      channel
-        .on("presence", { event: "sync" }, () => {
-          const state = channel.presenceState<{ at: number; nick: string }>()
-          if (!state[me]) return // todavía no llegó nuestro propio registro
-          const entries = Object.entries(state).map(([key, metas]) => ({
-            key,
-            at: Number(metas[0]?.at) || 0,
-            nick: cleanNick(String(metas[0]?.nick ?? "")),
-          }))
-          members = new Map(entries.map((e) => [e.key, e.nick]))
-          if (!placed) {
-            entries.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key))
-            if (entries.findIndex((e) => e.key === me) >= ROOM_SIZE) {
-              leaving = supabase.removeChannel(channel).catch(() => {})
-              tryRoom(i + 1)
-              return
-            }
-            placed = true
-            channelRef.current = channel
-            setStatus("online")
-          }
-          setUsers(members.size)
-        })
+      // Primero el canal, después la historia: así no se pierde nada de lo que llegue en el medio
+      channel = supabase
+        .channel(TOPIC, { config: { private: true } })
         .on("broadcast", { event: "msg" }, ({ payload }) => {
-          if (!placed || !payload || typeof payload !== "object") return
-          const { id, from, text: raw } = payload as Record<string, unknown>
-          if (typeof id !== "string" || typeof from !== "string" || typeof raw !== "string") return
-          // Solo de alguien presente en la sala, con su nombre de Presence, y respetando el modo lento
-          const author = members.get(from)
-          const body = cleanText(raw)
-          const t = Date.now()
-          if (!author || !body || t - (lastFrom.get(from) ?? 0) < SLOW_MS - 1000) return
-          lastFrom.set(from, t)
-          const m: Msg = { id: id.slice(0, 40), nick: author, text: body, at: t }
-          setMessages((prev) => [...prev.filter((p) => p.id !== m.id), m].slice(-MAX_MESSAGES))
+          if (!payload || typeof payload !== "object") return
+          setMessages((prev) => merge(prev, [toMsg(payload as Row)]).slice(-MAX_SHOWN))
         })
-        .subscribe(async (s, err) => {
-          if (s === "SUBSCRIBED") await channel.track({ at: joinedAt, nick })
-          else if ((s === "CHANNEL_ERROR" || s === "TIMED_OUT") && !stopped) {
-            console.warn("[chat]", s, err?.message ?? "")
-            setStatus("error")
-          }
-        })
+      channel.subscribe((s, err) => {
+        if ((s === "CHANNEL_ERROR" || s === "TIMED_OUT") && !stopped) {
+          console.warn("[chat]", s, err?.message ?? "")
+          setStatus("error")
+        }
+      })
+
+      const { data, error } = await supabase.from("chat_messages").select(FIELDS).order("id", { ascending: false }).limit(PAGE)
+      if (error) throw error
+      if (stopped) return
+      const rows = (data ?? []) as Row[]
+      setMessages((prev) => merge(prev, rows.map(toMsg)).slice(-MAX_SHOWN))
+      setHasOlder((h) => h || rows.length === PAGE)
+      setStatus("online")
     }
 
-    setStatus("connecting")
-    leaving.then(() => tryRoom(0))
+    start().catch((err: unknown) => {
+      console.warn("[chat]", err instanceof Error ? err.message : err)
+      if (!stopped) setStatus("error")
+    })
 
     return () => {
       stopped = true
-      channelRef.current = null
-      if (current) leaving = supabase.removeChannel(current).catch(() => {})
-      setMessages([])
-      setUsers(0)
+      if (channel) leaving = supabase.removeChannel(channel).catch(() => {})
     }
-  }, [open, nick, attempt])
+  }, [open, nick, visible, attempt])
 
-  // Reloj para el modo lento y para desvanecer y borrar los mensajes viejos
+  // Reloj del modo lento
   useEffect(() => {
-    if (!open) return
-    const tick = () => {
-      const t = Date.now()
-      setNow(t)
-      setMessages((prev) => (prev.some((m) => t - m.at >= MESSAGE_TTL) ? prev.filter((m) => t - m.at < MESSAGE_TTL) : prev))
-    }
-    tick()
-    const id = setInterval(tick, 1000)
+    if (!open || cooldownUntil <= now) return
+    const id = setInterval(() => setNow(Date.now()), 500)
     return () => clearInterval(id)
-  }, [open])
+  }, [open, cooldownUntil, now])
 
+  // Al llegar algo nuevo se baja al final; al cargar anteriores se queda donde estaba
+  const lastId = messages.at(-1)?.id
   useEffect(() => {
     const list = listRef.current
-    if (list) list.scrollTop = list.scrollHeight
-  }, [messages.length])
+    if (!list) return
+    if (keepScroll.current !== null) {
+      list.scrollTop = list.scrollHeight - keepScroll.current
+      keepScroll.current = null
+    } else list.scrollTop = list.scrollHeight
+  }, [lastId, messages.length, open])
 
   useEffect(() => {
     if (!open) return
@@ -187,18 +203,40 @@ export default function ChatRoom({ nick }: { nick: string }) {
 
   if (!SUPABASE_URL || !SUPABASE_KEY) return null
 
-  const send = (e: FormEvent) => {
-    e.preventDefault()
-    const body = cleanText(text)
-    const channel = channelRef.current
-    if (!body || !channel || status !== "online" || Date.now() < cooldownUntil) return
-    channel.send({ type: "broadcast", event: "msg", payload: { id: randomId(), from: meRef.current, text: body } })
-    setCooldownUntil(Date.now() + SLOW_MS)
-    setNow(Date.now())
-    setText("")
+  const loadOlder = async () => {
+    const supabase = getClient()
+    const oldest = messages[0]?.id
+    if (!supabase || !oldest || loadingOlder) return
+    setLoadingOlder(true)
+    const { data, error } = await supabase.from("chat_messages").select(FIELDS).lt("id", oldest).order("id", { ascending: false }).limit(PAGE)
+    setLoadingOlder(false)
+    if (error) return
+    const rows = (data ?? []) as Row[]
+    if (listRef.current) keepScroll.current = listRef.current.scrollHeight - listRef.current.scrollTop
+    // Al leer para atrás no se recorta: el tope de pantalla aplica solo a lo que llega en vivo
+    setMessages((prev) => merge(prev, rows.map(toMsg)))
+    setHasOlder(rows.length === PAGE)
   }
 
-  const online = open && nick && status === "online"
+  const send = async (e: FormEvent) => {
+    e.preventDefault()
+    const supabase = getClient()
+    const body = cleanText(text)
+    if (!supabase || !body || status !== "online" || Date.now() < cooldownUntil) return
+    const t = Date.now()
+    setCooldownUntil(t + SLOW_MS)
+    setNow(t)
+    setText("")
+    setNotice("")
+    const { data, error } = await supabase.from("chat_messages").insert({ nick, body }).select(FIELDS).single()
+    if (error) {
+      setText(body) // no se pierde lo escrito
+      setNotice(reason(error.message))
+      return
+    }
+    setMessages((prev) => merge(prev, [toMsg(data as Row)]).slice(-MAX_SHOWN))
+  }
+
   const wait = Math.max(0, Math.ceil((cooldownUntil - now) / 1000))
 
   return (
@@ -212,30 +250,26 @@ export default function ChatRoom({ nick }: { nick: string }) {
       >
         <PixelIcon name="chat" className="h-2.5 w-2.5" />
         chat
-        {online && users > 0 && <span className="tabular-nums text-[#5cff8a]">{users}</span>}
       </button>
 
       {open && (
         <section
           id="ts-chat"
-          aria-label="Chat anónimo"
+          aria-label="Chat"
           className="ts-px-panel fixed inset-x-3 bottom-[6rem] z-40 flex h-[min(50dvh,22rem)] flex-col font-mono text-[11px] text-white sm:left-auto sm:right-8 sm:bottom-[6.75rem] sm:w-80 lg:bottom-14"
         >
           <header className="flex items-center justify-between border-b border-dotted border-white/50 px-2.5 py-1.5">
             <p className="font-bold tracking-wide">
-              <span className="text-[#5cff8a]">&gt;</span> chat anónimo
+              <span className="text-[#5cff8a]">&gt;</span> chat
             </p>
-            <div className="flex items-center gap-2.5">
-              {online && users > 0 && <span className="tabular-nums text-white/60">{users} en línea</span>}
-              <button type="button" onClick={() => setOpen(false)} aria-label="Cerrar chat" className="ts-px-btn h-5 w-5">
-                <PixelIcon name="close" className="h-2 w-2" />
-              </button>
-            </div>
+            <button type="button" onClick={() => setOpen(false)} aria-label="Cerrar chat" className="ts-px-btn h-5 w-5">
+              <PixelIcon name="close" className="h-2 w-2" />
+            </button>
           </header>
 
-          {status === "full" || status === "error" ? (
+          {status === "error" ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 px-3 text-center">
-              <p className="text-white/80">{status === "full" ? "el chat está lleno. probá en un rato." : "no se pudo conectar."}</p>
+              <p className="text-white/80">no se pudo conectar.</p>
               <button type="button" onClick={() => setAttempt((a) => a + 1)} className="ts-px-btn h-6 px-2 uppercase">
                 reintentar
               </button>
@@ -243,27 +277,30 @@ export default function ChatRoom({ nick }: { nick: string }) {
           ) : (
             <>
               <div ref={listRef} role="log" aria-live="polite" className="flex-1 space-y-1 overflow-y-auto px-2.5 py-2">
-                {status === "connecting" && <p className="text-white/45">conectando…</p>}
-                {status === "online" && messages.length === 0 && (
-                  <p className="text-white/45">no hay mensajes aún…</p>
+                {hasOlder && (
+                  <button
+                    type="button"
+                    onClick={loadOlder}
+                    disabled={loadingOlder}
+                    className="mb-1 block w-full text-center text-[10px] uppercase tracking-[0.15em] text-white/45 hover:text-white/80 disabled:opacity-40"
+                  >
+                    {loadingOlder ? "cargando…" : "ver anteriores"}
+                  </button>
                 )}
-                {messages.map((m) => {
-                  const left = MESSAGE_TTL - (now - m.at)
-                  return (
-                    <p
-                      key={m.id}
-                      className="break-words leading-snug transition-opacity duration-1000"
-                      style={{ opacity: Math.max(0.15, Math.min(1, left / FADE_LAST)) }}
-                    >
-                      <span className="font-bold" style={{ color: colorOf(m.nick) }}>
-                        {m.nick}
-                      </span>
-                      <span className="text-white/40">: </span>
-                      {m.text}
-                    </p>
-                  )
-                })}
+                {status === "connecting" && messages.length === 0 && <p className="text-white/45">conectando…</p>}
+                {status === "online" && messages.length === 0 && <p className="text-white/45">todavía nadie escribió. empezá vos…</p>}
+                {messages.map((m) => (
+                  <p key={m.id} className="break-words leading-snug">
+                    <span className="float-right ml-2 text-[9px] tabular-nums text-white/30">{when(m.at)}</span>
+                    <span className="font-bold" style={{ color: colorOf(m.nick) }}>
+                      {m.nick}
+                    </span>
+                    <span className="text-white/40">: </span>
+                    {m.text}
+                  </p>
+                ))}
               </div>
+              {notice && <p className="border-t border-dotted border-white/30 px-2.5 py-1 text-[10px] text-[#ff9a3c]">{notice}</p>}
               <form onSubmit={send} className="flex items-center gap-2 border-t border-dotted border-white/50 px-2.5 py-1.5">
                 <span className="text-[#5cff8a]" aria-hidden="true">
                   &gt;
