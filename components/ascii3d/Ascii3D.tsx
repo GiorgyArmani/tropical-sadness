@@ -72,6 +72,10 @@ uniform float uFlash;
 uniform float uLevel;
 uniform float uDoor;
 uniform float uOpen;
+// Susto: dónde está el demonio (xyz) y si está (w), hacia dónde mira, y cuánto se apagan las luces
+uniform vec4 uScare;
+uniform float uScareA;
+uniform float uDim;
 
 float hash1(float n) { return fract(sin(n) * 43758.5453); }
 float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -187,7 +191,7 @@ const finishCompile = (gl: GL, scene: Scene3D, prog: WebGLProgram): Program | nu
   const names = [
     "uRes", "uTime", "uRo", "uFw", "uRt", "uUp", "uTan", "uAspect", "uStart", "uFogRef",
     "uSkyTop", "uSkyHor", "uSkyCloud", "uLight", "uStars", "uSunDir", "uLightCol", "uClouds", "uRain", "uFogW", "uFlash",
-    "uLevel", "uDoor", "uOpen",
+    "uLevel", "uDoor", "uOpen", "uScare", "uScareA", "uDim",
   ]
   return { prog, u: Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(prog, n)])) }
 }
@@ -223,6 +227,7 @@ type Props = {
 const OPEN_MS = 1300 // la puerta se abre, la cámara gira y entra
 const CLOSE_MS = 1500 // al llegar: se ve la puerta cerrándose y la cámara vuelve a mirar el pasillo
 const NEAR_M = 1.8 // a cuántos metros de una puerta se la puede abrir
+const EXIT_NEAR = 3.2 // a cuántos metros de la puerta de salida aparece "volver al pasillo"
 const PASS_M = 1.6 // cuánto hay que seguir empujando para pasar de largo una puerta con luz
 
 const HOLD_MAX = 2500 // si el shader nuevo no termina en este tiempo, se espera de una
@@ -255,6 +260,8 @@ export default function Ascii3D({
   const zoomRef = useRef(0)
   const viewRef = useRef({ yaw: scene.camera.yaw, pitch: scene.camera.pitch })
   const failRef = useRef<HTMLParagraphElement>(null)
+  const doorBtnRef = useRef<HTMLButtonElement>(null) // "abrir puerta", que el motor pone encima de la puerta
+  const exitBtnRef = useRef<HTMLButtonElement>(null) // "volver al pasillo", sobre la puerta de cada escena
 
   useEffect(() => {
     wantRef.current = scene
@@ -270,30 +277,39 @@ export default function Ascii3D({
 
   const walkRef = useRef(0) // metros recorridos en las escenas para caminar
   // Las puertas con luz frenan: al llegar a una, se queda parado frente a ella. Para seguir hay que
-  // empujar un poco más (PASS_M), o volver atrás. held/passed son números de puerta sin dar la vuelta.
-  const stopRef = useRef<{ held: number | null; passed: number | null; push: number; prev: number }>({
+  // empujar un poco más (PASS_M), o volver por donde se vino. held/passed son números de puerta sin dar
+  // la vuelta; dir es el sentido en que se venía caminando (1 hacia -z, -1 hacia +z).
+  const stopRef = useRef<{ held: number | null; passed: number | null; push: number; prev: number; dir: number }>({
     held: null,
     passed: null,
     push: 0,
     prev: 0,
+    dir: 1,
   })
   const zoomBy = (d: number) => {
-    // En el pasillo la rueda no acerca: camina hacia adelante (o atrás), sin fin
+    // En las escenas para caminar la rueda no acerca: camina hacia donde se mira. Dándose la vuelta se
+    // camina de verdad hacia atrás (mirando para allá), no en reversa.
     if (sceneRef.current.camera.walk) {
       if (lockRef.current) return
+      const f = Math.cos(viewRef.current.yaw)
+      const m = d * 6 * (f < 0 ? -1 : 1) * Math.max(Math.abs(f), 0.3)
       const st = stopRef.current
       if (st.held !== null) {
-        if (d > 0) {
-          st.push += d * 6
+        const onward = Math.sign(m) === st.dir
+        if (onward) {
+          st.push += Math.abs(m)
           if (st.push < PASS_M) return
-          walkRef.current += 0.6 // pasa de largo
+          walkRef.current += st.dir * 0.6 // pasa de largo
         }
         st.passed = st.held
         st.held = null
-        if (d > 0) return
+        if (onward) return
       }
-      walkRef.current += d * 6
+      walkRef.current += m
     } else zoomRef.current = clamp(zoomRef.current + d, 0, ZOOM_MAX)
+  }
+  const turnAround = () => {
+    if (!lockRef.current) viewRef.current.yaw += Math.PI
   }
 
   useEffect(() => {
@@ -425,6 +441,53 @@ export default function Ascii3D({
     let shownVisit = wantVisit.current.visit
     let door: { n: number; side: number; kind: number; type: "open" | "close"; at: number; fired: boolean } | null = null
     let nearKey = ""
+    let nearAt: { n0: number; side: number } | null = null // la puerta de al lado, para poner el botón encima
+    let btnShown = false
+    // Jumpscare del pasillo: a veces el demonio está detrás de quien se da la vuelta, o se cortan las luces
+    // y al volver lo tiene en la cara. dark = ms a oscuras antes; pos/ang se fijan cuando aparece.
+    let scare: { at: number; dark: number; pos: V3 | null; ang: number } | null = null
+    let scareReady = Infinity // antes de esto no hay susto (se arma al llegar al pasillo)
+    let facingSign = 1 // hacia dónde se miraba la última vez que se miró derecho por el pasillo
+    let audio: AudioContext | null = null
+    // Un golpe de estática y un chillido que cae, hecho al vuelo (no hay archivos de sonido)
+    const stinger = () => {
+      try {
+        audio ??= new AudioContext()
+        if (audio.state === "suspended") void audio.resume()
+        const ac = audio
+        const t0 = ac.currentTime
+        const out = ac.createGain()
+        out.gain.setValueAtTime(0.0001, t0)
+        out.gain.exponentialRampToValueAtTime(0.35, t0 + 0.015)
+        out.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.1)
+        out.connect(ac.destination)
+        const len = Math.floor(ac.sampleRate * 1.1)
+        const buf = ac.createBuffer(1, len, ac.sampleRate)
+        const ch = buf.getChannelData(0)
+        for (let i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1
+        const noise = ac.createBufferSource()
+        noise.buffer = buf
+        const bp = ac.createBiquadFilter()
+        bp.type = "bandpass"
+        bp.frequency.setValueAtTime(2400, t0)
+        bp.frequency.exponentialRampToValueAtTime(300, t0 + 1)
+        bp.Q.value = 0.8
+        noise.connect(bp).connect(out)
+        noise.start(t0)
+        for (const f of [880, 933]) {
+          const o = ac.createOscillator()
+          o.type = "sawtooth"
+          o.frequency.setValueAtTime(f, t0)
+          o.frequency.exponentialRampToValueAtTime(f * 0.35, t0 + 1)
+          const g = ac.createGain()
+          g.gain.value = 0.25
+          o.connect(g).connect(out)
+          o.start(t0)
+          o.stop(t0 + 1.1)
+        }
+      } catch {} // sin audio el susto sigue igual
+    }
+    let exitShown = false
     let exited = false // ya se salió por el final (escalera)
     const report = (d: NearDoor | null) => {
       const key = d ? `${level}:${d.door}` : ""
@@ -438,11 +501,15 @@ export default function Ascii3D({
       exited = false
       door = null
       if (sc.camera.walk?.start) walk = walkRef.current = sc.camera.walk.start
-      stopRef.current = { held: null, passed: null, push: 0, prev: walk }
+      stopRef.current = { held: null, passed: null, push: 0, prev: walk, dir: 1 }
+      scare = null
+      facingSign = 1
+      // Recién llegado al pasillo hay un rato de calma antes del primer susto
+      scareReady = sc.camera.doors ? now + 25000 + Math.random() * 20000 : Infinity
       if (sc.camera.walk && sc.camera.doors && e) {
         // Se aparece justo frente a la puerta por la que se vuelve, mirándola mientras se cierra
         walk = walkRef.current = e.door * DOOR_GAP
-        stopRef.current = { held: null, passed: e.door, push: 0, prev: walk } // esa no frena al salir
+        stopRef.current = { held: null, passed: e.door, push: 0, prev: walk, dir: 1 } // esa no frena al salir
         door = { n: e.door, side: sideOf(e.door), kind: kindAt(level, e.door), type: "close", at: now, fired: false }
       }
     }
@@ -553,6 +620,7 @@ export default function Ascii3D({
       let ax = 0 // corrimiento de costado: entrar por una puerta
       let face = a
       let open = 0
+      nearAt = null
       if (cam.walk) {
         const L = cam.walk.loop
         // Laberinto: la puerta de al lado, abrirla, y la animación de abrir o cerrar
@@ -561,10 +629,14 @@ export default function Ascii3D({
           const st = stopRef.current
           const target = walkRef.current
           if (st.passed !== null && Math.abs(target - st.passed * DOOR_GAP) > 3) st.passed = null
-          if (st.held === null && !door && phase.kind === "none" && target > st.prev) {
-            for (let c = Math.ceil(st.prev / DOOR_GAP); c * DOOR_GAP <= target; c++) {
+          // (en los dos sentidos: dándose la vuelta también se frena en las puertas de atrás)
+          if (st.held === null && !door && phase.kind === "none" && target !== st.prev) {
+            const dir = target > st.prev ? 1 : -1
+            const first = dir > 0 ? Math.ceil(st.prev / DOOR_GAP) : Math.floor(st.prev / DOOR_GAP)
+            for (let c = first; dir > 0 ? c * DOOR_GAP <= target : c * DOOR_GAP >= target; c += dir) {
               if (c !== st.passed && kindAt(level, c) > 0) {
                 st.held = c
+                st.dir = dir
                 st.push = 0
                 walkRef.current = c * DOOR_GAP
                 break
@@ -577,11 +649,14 @@ export default function Ascii3D({
           const kind = kindAt(level, n)
           const near = !door && phase.kind === "none" && Math.abs(walk - n0 * DOOR_GAP) < NEAR_M && kind > 0
           report(near ? { door: n, kind } : null)
+          nearAt = near ? { n0, side: sideOf(n) } : null
           if (openReq.current && near) door = { n, side: sideOf(n), kind, type: "open", at: now, fired: false }
           openReq.current = false
           if (door) {
             const ease = (x: number) => x * x * (3 - 2 * x)
-            const toDoor = -door.side * Math.PI * 0.5 // girar para mirar la puerta
+            // Girar para mirar la puerta, por el lado más corto (se puede venir mirando para cualquier lado)
+            const raw = -door.side * Math.PI * 0.5
+            const toDoor = a + (((raw - a + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) - Math.PI
             if (door.type === "open") {
               const p = clamp((now - door.at) / OPEN_MS, 0, 1)
               open = ease(clamp(p * 1.4, 0, 1))
@@ -604,14 +679,16 @@ export default function Ascii3D({
         lockRef.current = !!cam.doors && !!door
         // Primera persona: se avanza solo, despacito, y la rueda empuja; cerca de una puerta con luz se frena
         // Frente a una puerta con luz se queda quieto, esperando
-        if (!reduced && !lockRef.current && stopRef.current.held === null) walkRef.current += cam.walk.drift / FPS
+        // (hacia donde se mira: si se mira la pared no se avanza, si se mira atrás se va para atrás)
+        if (!reduced && !lockRef.current && stopRef.current.held === null) walkRef.current += (cam.walk.drift / FPS) * Math.cos(yaw)
         walk += (walkRef.current - walk) * 0.08
-        // Al salir se empuja un poco hacia adelante (antes eran 27 m: en la escalera daba varias vueltas y parpadeaba)
-        let along = ((((walk + rush * 3) % L) + L) % L)
+        // Al salir se empuja un poco hacia donde se mira (antes eran 27 m: en la escalera daba varias vueltas y parpadeaba)
+        const push = walk + rush * 3 * Math.cos(face)
+        let along = (((push % L) + L) % L)
         if (cam.walk.exit) {
-          // Esta escena no da la vuelta: al llegar a la puerta del final se sale
-          walkRef.current = clamp(walkRef.current, 0, L)
-          along = clamp(walk + rush * 3, 0, L - 0.01)
+          // Esta escena no da la vuelta: al llegar a la puerta del final se sale (y para atrás no se baja del primer escalón)
+          walkRef.current = clamp(walkRef.current, cam.walk.start ?? 0, L)
+          along = clamp(push, 0, L - 0.01)
           if (walk > L - 0.3 && !exited) {
             exited = true
             calls.current.onLeave?.()
@@ -637,8 +714,85 @@ export default function Ascii3D({
         ]
         fw = norm(sub(cam.target, ro))
       }
+      // El susto (solo en el pasillo, y nunca con movimiento reducido)
+      let scareW = 0
+      let dim = 0
+      if (cam.doors && !reduced) {
+        const cy = Math.cos(yaw)
+        if (!scare && phase.kind === "none" && !door && now > scareReady) {
+          // Se terminó de dar la vuelta: a veces estaba ahí atrás. Si no, muy de vez en cuando, se cortan las luces
+          const turned = Math.abs(cy) > 0.85 && Math.sign(cy) !== facingSign
+          if ((turned && Math.random() < 0.4) || Math.random() < 1 / (FPS * 80)) {
+            scare = { at: now, dark: turned ? 0 : 700, pos: null, ang: 0 }
+            scareReady = now + 60000 + Math.random() * 60000
+          }
+        }
+        if (Math.abs(cy) > 0.85) facingSign = Math.sign(cy)
+        if (scare) {
+          const hit = now - scare.at - scare.dark
+          if (hit < 0) dim = 1
+          else {
+            if (!scare.pos) {
+              // Parado en el piso, a un paso, mirando a la cámara
+              scare.pos = [ro[0] - Math.sin(face) * 1.35, 0, ro[2] - Math.cos(face) * 1.35]
+              scare.ang = face
+              stinger()
+            }
+            if (hit < 650) {
+              scareW = 1
+              const k = 1 - hit / 650
+              ro[0] += (Math.random() - 0.5) * 0.07 * k
+              ro[1] += (Math.random() - 0.5) * 0.07 * k
+              if (hit < 140) staticAmt = Math.max(staticAmt, 0.55)
+            } else staticAmt = Math.max(staticAmt, clamp(1 - (hit - 650) / 350, 0, 1) * 0.9)
+            if (hit > 1000) scare = null
+          }
+          nearAt = null
+        }
+        if (scare) lockRef.current = true // durante el susto no se camina ni se abren puertas
+      }
+
       const rt = norm(cross(fw, [0, 1, 0]))
       const up = cross(rt, fw)
+
+      // Los botones de las puertas van sobre la puerta misma: se proyecta su centro a la pantalla, igual
+      // que el shader. d = de la cámara a la puerta. Devuelve si quedó a la vista.
+      const pin = (btn: HTMLElement | null, d: V3 | null, was: boolean) => {
+        let show = false
+        if (btn && d) {
+          const z = d[0] * fw[0] + d[1] * fw[1] + d[2] * fw[2]
+          if (z > 0.2) {
+            const k = 1 / (z * 2 * walkTan)
+            const ux = (d[0] * rt[0] + d[1] * rt[1] + d[2] * rt[2]) * k
+            const uy = (d[0] * up[0] + d[1] * up[1] + d[2] * up[2]) * k
+            const span = rows * lh
+            // Si la puerta queda medio afuera, el botón se queda pegado al borde de ese lado
+            const x = clamp((cols * cw) / 2 + ux * span, 80, W - 80)
+            const y = clamp(span / 2 - uy * span, 40, H - 40)
+            btn.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -50%)`
+            show = true
+          }
+        }
+        if (btn && show !== was) btn.style.visibility = show ? "visible" : "hidden"
+        return show
+      }
+      // En el pasillo: la puerta con luz de al lado
+      btnShown = pin(
+        doorBtnRef.current,
+        nearAt && cam.walk ? [nearAt.side * 1.8 - ro[0], 1.3 - ro[1], -(nearAt.n0 * DOOR_GAP - walk)] : null,
+        btnShown,
+      )
+      // En las otras escenas: la puerta de vuelta al pasillo (no mientras se entra o se sale, ni desde atrás)
+      const ex = cam.exitDoor
+      let exD: V3 | null = null
+      if (ex && phase.kind === "none" && !exited) {
+        exD = sub(ex.at, ro)
+        const len = Math.hypot(exD[0], exD[1], exD[2])
+        const f = ex.facing
+        // Solo frente a la puerta: cerca, y si tiene frente, mirándola de ese lado (no de costado ni de lejos)
+        if (len > EXIT_NEAR || (f && -(exD[0] * f[0] + exD[1] * f[1] + exD[2] * f[2]) / len < 0.25)) exD = null
+      }
+      exitShown = pin(exitBtnRef.current, exD, exitShown)
 
       gl.viewport(0, 0, cols, rows)
       gl.useProgram(program.prog)
@@ -672,6 +826,10 @@ export default function Ascii3D({
       gl.uniform1f(u.uLevel, level)
       gl.uniform1f(u.uDoor, door ? door.n : -1)
       gl.uniform1f(u.uOpen, open)
+      const sp = scare?.pos ?? [0, 0, 0]
+      gl.uniform4f(u.uScare, sp[0], sp[1], sp[2], scareW)
+      gl.uniform1f(u.uScareA, scare?.ang ?? 0)
+      gl.uniform1f(u.uDim, dim)
       gl.drawArrays(gl.TRIANGLES, 0, 3)
       gl.readPixels(0, 0, cols, rows, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
 
@@ -850,14 +1008,23 @@ export default function Ascii3D({
       zoomBy(-e.deltaY * 0.0012)
     }
     const onKey = (e: KeyboardEvent) => {
-      if (!activeRef.current || e.target instanceof HTMLInputElement) return
+      if (!activeRef.current || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      const walking = !!sceneRef.current.camera.walk
+      const k = e.key.toLowerCase()
       if (e.key === "+" || e.key === "=") zoomBy(0.12)
       else if (e.key === "-") zoomBy(-0.12)
-      else if (e.key === "ArrowLeft") look(-40, 0)
-      else if (e.key === "ArrowRight") look(40, 0)
-      else if (e.key === "ArrowUp") look(0, -30)
-      else if (e.key === "ArrowDown") look(0, 30)
-      else if (e.key === "e" || e.key === "E" || e.key === "Enter") openReq.current = true
+      else if (e.key === "ArrowLeft" || (walking && k === "a")) look(-40, 0)
+      else if (e.key === "ArrowRight" || (walking && k === "d")) look(40, 0)
+      // Caminando, arriba y abajo mueven (W/S también); en las demás escenas inclinan la vista
+      else if (e.key === "ArrowUp" || (walking && k === "w")) walking ? zoomBy(0.12) : look(0, -30)
+      else if (e.key === "ArrowDown" || (walking && k === "s")) walking ? zoomBy(-0.12) : look(0, 30)
+      else if (walking && k === "q") turnAround()
+      else if (k === "e" || (e.key === "Enter" && !(e.target instanceof HTMLButtonElement))) {
+        // En el pasillo abre la puerta de al lado; en las demás escenas sale por su puerta
+        const cam = sceneRef.current.camera
+        if (cam.doors) openReq.current = true
+        else if (cam.exitDoor && k === "e" && exitShown) calls.current.onLeave?.() // solo frente a la puerta
+      }
     }
     layer.addEventListener("pointerdown", onDown)
     layer.addEventListener("pointermove", onMove)
@@ -872,6 +1039,7 @@ export default function Ascii3D({
     return () => {
       cancelAnimationFrame(frame)
       liveSky.stop()
+      void audio?.close()
       window.removeEventListener("resize", resize)
       window.removeEventListener("keydown", onKey)
       layer.removeEventListener("pointerdown", onDown)
@@ -894,6 +1062,29 @@ export default function Ascii3D({
       <p ref={failRef} hidden className="absolute inset-x-0 top-1/2 text-center font-mono text-xs text-white/60">
         este navegador no puede dibujar en 3d
       </p>
+      {/* Siempre montado (el motor lo muestra y lo mueve); solo aparece al lado de una puerta con luz */}
+      <button
+        ref={doorBtnRef}
+        type="button"
+        onClick={() => void (openReq.current = true)}
+        aria-label="Abrir la puerta"
+        style={{ position: "absolute", left: 0, top: 0, visibility: "hidden" }}
+        className="ts-px-btn ts-px-btn--primary pointer-events-auto z-20 h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em] will-change-transform"
+      >
+        abrir puerta
+        <PixelIcon name="right" className="h-2.5 w-2.5" />
+      </button>
+      <button
+        ref={exitBtnRef}
+        type="button"
+        onClick={() => calls.current.onLeave?.()}
+        aria-label="Volver al pasillo por la puerta"
+        style={{ position: "absolute", left: 0, top: 0, visibility: "hidden" }}
+        className="ts-px-btn ts-px-btn--primary pointer-events-auto z-20 h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em] will-change-transform"
+      >
+        volver al pasillo
+        <PixelIcon name="right" className="h-2.5 w-2.5" />
+      </button>
 
       <div className={`pointer-events-none absolute z-20 flex flex-col gap-2 ${controlsClassName}`}>
         <div className="flex items-center gap-3">
@@ -904,12 +1095,22 @@ export default function Ascii3D({
           <button type="button" onClick={() => zoomBy(0.2)} className="ts-px-btn pointer-events-auto h-6 w-6" aria-label={scene.camera.walk ? "Avanzar" : "Acercarse"}>
             <PixelIcon name="right" className="h-2.5 w-2.5" />
           </button>
+          {scene.camera.walk && (
+            <button
+              type="button"
+              onClick={turnAround}
+              className="ts-px-btn pointer-events-auto h-6 px-2 font-mono text-[10px] uppercase tracking-[0.15em]"
+              aria-label="Darse la vuelta"
+            >
+              vuelta
+            </button>
+          )}
         </div>
         <p className="hidden font-mono text-[10px] lowercase tracking-[0.15em] text-white/45 sm:block">
           {scene.camera.doors
-            ? "scrollea o usa la rueda del mouse para moverte · las puertas con luz se abren (E)"
+            ? "scrollea o usa la rueda del mouse para moverte · arrastra para mirar alrededor (Q: darte la vuelta) · las puertas con luz se abren (E)"
             : scene.camera.walk
-              ? "scrollea o usa la rueda del mouse para moverte"
+              ? "scrollea o usa la rueda del mouse para moverte · arrastra para mirar alrededor"
               : "scrollea o usa la rueda del mouse para acercarte"}
         </p>
       </div>

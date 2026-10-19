@@ -33,6 +33,9 @@ export type Scene3D = {
       start?: number // metros desde donde se arranca al llegar
     }
     doors?: boolean // el pasillo del laberinto: sus puertas llevan a otras escenas (maze.ts)
+    // La puerta de vuelta al pasillo (el botón se dibuja encima). facing: hacia dónde mira su frente;
+    // desde atrás no se muestra (sin facing se ve de los dos lados)
+    exitDoor?: { at: [number, number, number]; facing?: [number, number, number] }
     yawRange?: [number, number]
     pitchRange: [number, number]
   }
@@ -76,14 +79,16 @@ vec4 eyePair(float i, float kind) {
 // --- El laberinto (misma cuenta que maze.ts) ---
 // Número de puerta en esta parte del pasillo: la 0 está en z = 0 y se avanza hacia -z
 float doorIdx(float z) { return mod(floor((-z + 3.0) / 6.0), 100.0); }
-// 0 cerrada, 1 isla, 2 cementerio, 3 escalera, 4 otro pasillo
+// 0 cerrada, 1 isla, 2 cementerio, 3 escalera, 4 otro pasillo (misma cuenta que kindAt en maze.ts)
 float doorKind(float n) {
   if (n < 0.5) return 0.0;
-  float i = mod(n + uLevel * 3.0, 8.0);
-  if (abs(i - 1.0) < 0.5) return 1.0;
-  if (abs(i - 4.0) < 0.5) return 2.0;
-  if (abs(i - 6.0) < 0.5) return 4.0;
-  if (abs(i - 7.0) < 0.5) return 3.0;
+  float k = n + uLevel * 5.0;
+  float i = mod(k + 0.5, 12.0) - 0.5; // el +0.5 evita que 24/12 dé 1.9999
+  if (abs(i - 2.0) < 0.5 || abs(i - 5.0) < 0.5 || abs(i - 9.0) < 0.5) return 4.0;
+  if (abs(i - 11.0) < 0.5) {
+    float e = mod(floor((k + 0.5) / 12.0) + uLevel, 3.0);
+    return e < 0.5 ? 1.0 : (e < 1.5 ? 2.0 : 3.0);
+  }
   return 0.0;
 }
 // La luz que se escapa por debajo de cada puerta dice adónde lleva
@@ -108,6 +113,29 @@ vec3 levelTint() {
 }
 // La puerta que se está abriendo (o cerrando detrás de quien llega)
 bool isOpen(float n) { return uOpen > 0.001 && abs(n - uDoor) < 0.5; }
+
+// Demonio: alto, encorvado, cuernos y brazos largos hasta las rodillas. Mira hacia +z
+float demon(vec3 fp) {
+  vec3 q = vec3(abs(fp.x), fp.yz);
+  float body = sdCapsule(fp, vec3(0.0, 0.3, 0.0), vec3(0.0, 1.75, 0.08), 0.24);
+  body = min(body, sdEllipsoid(fp - vec3(0.0, 2.05, 0.12), vec3(0.2, 0.24, 0.2)));
+  body = min(body, sdCapsule(q, vec3(0.1, 2.2, 0.1), vec3(0.32, 2.62, -0.05), 0.045)); // cuernos
+  body = min(body, sdCapsule(q, vec3(0.28, 1.65, 0.05), vec3(0.42, 0.55, 0.2), 0.07)); // brazos
+  body = min(body, sdCapsule(q, vec3(0.12, 0.3, 0.0), vec3(0.16, 0.0, 0.0), 0.08)); // patas
+  return body;
+}
+// El susto: el demonio parado justo delante, girado para mirar a la cámara (uScareA)
+vec3 scareLocal(vec3 p) {
+  vec3 d = p - uScare.xyz;
+  float c = cos(uScareA);
+  float s = sin(uScareA);
+  return vec3(d.x * c - d.z * s, d.y, d.x * s + d.z * c);
+}
+vec3 scareWorld(vec3 l) {
+  float c = cos(uScareA);
+  float s = sin(uScareA);
+  return uScare.xyz + vec3(l.x * c + l.z * s, l.y, -l.x * s + l.z * c);
+}
 
 vec2 map(vec3 p) {
   float zc = mod(p.z + 3.0, 6.0) - 3.0;
@@ -142,16 +170,7 @@ vec2 map(vec3 p) {
   float n = eyeCount(kind);
   if (n > 0.5) {
     vec3 fp = p - appBase();
-    if (kind < 0.5) {
-      // Demonio: alto, encorvado, cuernos y brazos largos hasta las rodillas
-      vec3 q = vec3(abs(fp.x), fp.yz);
-      float body = sdCapsule(fp, vec3(0.0, 0.3, 0.0), vec3(0.0, 1.75, 0.08), 0.24);
-      body = min(body, sdEllipsoid(fp - vec3(0.0, 2.05, 0.12), vec3(0.2, 0.24, 0.2)));
-      body = min(body, sdCapsule(q, vec3(0.1, 2.2, 0.1), vec3(0.32, 2.62, -0.05), 0.045)); // cuernos
-      body = min(body, sdCapsule(q, vec3(0.28, 1.65, 0.05), vec3(0.42, 0.55, 0.2), 0.07)); // brazos
-      body = min(body, sdCapsule(q, vec3(0.12, 0.3, 0.0), vec3(0.16, 0.0, 0.0), 0.08)); // patas
-      r = opU(r, vec2(body, 8.0));
-    }
+    if (kind < 0.5) r = opU(r, vec2(demon(fp), 8.0));
     // Ojos (del demonio, o solos en la oscuridad)
     for (int i = 0; i < 5; i++) {
       if (float(i) >= n) break;
@@ -160,6 +179,13 @@ vec2 map(vec3 p) {
       e.x = abs(e.x) - c.w;
       r = opU(r, vec2(length(e * vec3(1.0, 1.7, 1.0)) - 0.07, 9.0));
     }
+  }
+  if (uScare.w > 0.5) {
+    vec3 sp = scareLocal(p);
+    r = opU(r, vec2(demon(sp), 8.0));
+    vec3 e = sp - vec3(0.0, 2.08, 0.3);
+    e.x = abs(e.x) - 0.115;
+    r = opU(r, vec2(length(e * vec3(1.0, 1.7, 1.0)) - 0.07, 9.0));
   }
   return r;
 }
@@ -179,6 +205,15 @@ vec3 glow(vec3 rd, float t) {
       if (along < 0.0 || t < along - 0.3) continue; // detrás de la cámara o tapado
       float d = length(e - rd * along) / along; // distancia angular al ojo
       g += vec3(1.0, 0.1, 0.05) * exp(-d * d * 16000.0) * 1.8;
+    }
+  }
+  if (uScare.w > 0.5) {
+    for (int s = 0; s < 2; s++) {
+      vec3 e = scareWorld(vec3((float(s) * 2.0 - 1.0) * 0.115, 2.08, 0.3)) - uRo;
+      float along = dot(e, rd);
+      if (along < 0.0 || t < along - 0.3) continue;
+      float d = length(e - rd * along) / along;
+      g += vec3(1.0, 0.08, 0.04) * exp(-d * d * 1500.0) * 2.2;
     }
   }
   return g;
@@ -206,6 +241,9 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) {
   float near = 1.4 / (1.0 + dot(d, d) * 0.6);
   float dif = max(dot(n, L), 0.0);
   vec3 light = levelLight() * (0.2 + near * (0.5 + 0.8 * dif)) * lmp;
+  // Antes del susto los tubos se cortan; con el demonio delante solo queda una luz roja
+  light *= 1.0 - uDim * 0.92;
+  if (uScare.w > 0.5) light = vec3(0.9, 0.07, 0.04) * (0.25 + near * (0.4 + 0.9 * dif));
   // La puerta de al lado: de qué color es su luz y cuánto llega hasta acá
   float dn = doorIdx(p.z);
   float dside = mod(dn, 2.0) < 0.5 ? 1.0 : -1.0;
@@ -243,7 +281,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) {
     float panel = step(max(abs(q.x) - 0.13, abs(q.y) - 0.35), 0.0);
     return vec3(0.5, 0.3, 0.16) * (1.0 - panel * 0.3) * light * (0.5 + 0.5 * ao) + kc * 0.12;
   }
-  if (m < 5.5) return levelLight() * 1.3 * lamp(idx);
+  if (m < 5.5) return uScare.w > 0.5 ? vec3(0.6, 0.03, 0.02) : levelLight() * 1.3 * lamp(idx) * (1.0 - uDim * 0.95);
   if (m < 6.5) return vec3(0.9, 0.75, 0.35) * light + 0.15;
   // Cartelito sobre la puerta: apagado si está cerrada, del color de su destino si abre
   if (m < 7.5) return doorKind(dn) < 0.5 ? vec3(0.12, 0.14, 0.12) : kc * 1.3;
@@ -625,7 +663,6 @@ export const SCENES_3D: Scene3D[] = [
       pitch: 0.03,
       frame: 1.4,
       clip: 1e4,
-      yawRange: [-0.6, 0.6],
       pitchRange: [-0.3, 0.3],
       walk: { drift: 0.35, loop: 600, fov: 72 },
       doors: true,
@@ -646,9 +683,9 @@ export const SCENES_3D: Scene3D[] = [
       pitch: -0.12,
       frame: 5.5,
       clip: 1e4,
-      yawRange: [-0.7, 0.7],
       pitchRange: [-0.5, 0.35],
       walk: { drift: 0.3, loop: 9.4, fov: 70, climb: { run: 0.6, rise: 0.32, steps: 14 }, flash: 0.5, exit: true, start: 0.6 },
+      exitDoor: { at: [0, 5.68, -8.6], facing: [0, 0, 1] },
     },
   },
   {
@@ -662,7 +699,7 @@ export const SCENES_3D: Scene3D[] = [
     saturation: 0.95,
     grade: 0.2,
     outdoor: true,
-    camera: { target: [0, 1, 0], yaw: 0.15, pitch: 0.18, frame: 6.5, clip: 40, pitchRange: [0.02, 1.1] },
+    camera: { target: [0, 1, 0], yaw: 0.15, pitch: 0.18, frame: 6.5, clip: 40, pitchRange: [0.02, 1.1], exitDoor: { at: [2.1, 1.25, 1.3], facing: [-0.6, 0, 0.8] } },
   },
   {
     id: "cementerio",
@@ -674,6 +711,14 @@ export const SCENES_3D: Scene3D[] = [
     saturation: 0.85,
     grade: 0.25,
     outdoor: true,
-    camera: { target: [0, 0.9, -0.3], yaw: 0.1, pitch: 0.22, frame: 5.5, clip: 40, pitchRange: [0.02, 1.1] },
+    camera: {
+      target: [0, 0.9, -0.3],
+      yaw: 0.1,
+      pitch: 0.22,
+      frame: 5.5,
+      clip: 40,
+      pitchRange: [0.02, 1.1],
+      exitDoor: { at: [0, 1.12, -0.3], facing: [0, 0, 1] }, // la puerta de la cripta
+    },
   },
 ]

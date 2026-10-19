@@ -11,13 +11,22 @@ export const LEVELS = 3
 
 export const KIND = { cerrada: 0, isla: 1, cementerio: 2, escalera: 3, pasillo: 4 } as const
 
-// Cada 8 puertas: posición 1 isla, 4 cementerio, 6 otro pasillo, 7 escalera; el resto cerradas
-const PATTERN = [0, 1, 0, 0, 2, 0, 4, 3]
+// Backrooms: casi todas las puertas con luz llevan a otro pasillo, y cada tanto una a un entorno.
+// En cada tramo de 12 puertas: 3 llevan a otro pasillo (posiciones 2, 5 y 9) y 1 a un entorno (la 11),
+// que va rotando entre isla, cementerio y escalera de un tramo al siguiente. El resto, cerradas.
+const CYCLE = 12
+const HALL_AT = [2, 5, 9]
+const PLACE_AT = 11
+const PLACES = [KIND.isla, KIND.cementerio, KIND.escalera]
 
-export const kindAt = (level: number, door: number) => {
+export const kindAt = (level: number, door: number): number => {
   const n = ((door % DOORS) + DOORS) % DOORS
   if (n === 0) return KIND.cerrada // la de la entrada nunca abre
-  return PATTERN[(n + level * 3) % PATTERN.length]
+  const k = n + level * 5
+  const i = k % CYCLE
+  if (HALL_AT.includes(i)) return KIND.pasillo
+  if (i === PLACE_AT) return PLACES[(Math.floor(k / CYCLE) + level) % PLACES.length]
+  return KIND.cerrada
 }
 
 export const sideOf = (door: number) => (((door % 2) + 2) % 2 === 0 ? 1 : -1)
