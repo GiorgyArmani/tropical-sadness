@@ -28,7 +28,7 @@ export default function MusicBar({ ref }: { ref?: Ref<RadioHandle> }) {
   // Conectar = saltar al punto en vivo y sonar. Se llama dentro del click para que el navegador deje reproducir.
   const connect = () => {
     const audio = audioRef.current
-    if (!audio) return
+    if (!audio || !audio.paused) return // ya está sonando: no saltar de nuevo al vivo
     if (Number.isFinite(audio.duration) && audio.duration > 0) audio.currentTime = livePosition(audio.duration)
     else syncPending.current = true
     setTuning(true)

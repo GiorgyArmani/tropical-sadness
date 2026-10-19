@@ -1,7 +1,7 @@
 "use client"
 
 import { useSearchParams } from "next/navigation"
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import MusicBar, { type RadioHandle } from "./MusicBar"
 import AsciiWorld from "./ascii/AsciiWorld"
 import { useScene } from "./ascii/scenes"
@@ -12,6 +12,7 @@ import SocialLinks from "./SocialLinks"
 import ChatRoom from "./ChatRoom"
 import RadioGate from "./RadioGate"
 import StaticBurst, { type StaticBurstHandle } from "./StaticBurst"
+import { saveNick, useSavedNick } from "./useSavedNick"
 
 type Mode = "2d" | "3d"
 
@@ -20,7 +21,10 @@ type Mode = "2d" | "3d"
 export default function TropicalSadnessLanding({ initialMode = "2d" }: { initialMode?: Mode }) {
   const radioRef = useRef<RadioHandle>(null)
   const burstRef = useRef<StaticBurstHandle>(null)
-  const [nick, setNick] = useState("")
+  // El nombre se guarda en el dispositivo: quien vuelve entra directo al chat, sin la pantalla de entrada
+  const saved = useSavedNick()
+  const nick = saved ?? ""
+  const tuned = useRef(false) // la radio ya arrancó con un gesto en esta visita
   const [mode, setMode] = useState<Mode>(initialMode)
   const params = useSearchParams()
   const [index3d, setIndex3d] = useState(() => Math.max(0, SCENES_3D.findIndex((s) => s.id === params.get("escena"))))
@@ -35,6 +39,21 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
       window.history.replaceState(null, "", to === "3d" ? "/3d" : "/")
     })
   }
+
+  // El navegador solo deja sonar audio después de un gesto: si ya hay nombre guardado, la radio
+  // arranca con el primer toque, click o tecla en cualquier parte de la página
+  useEffect(() => {
+    if (!saved || tuned.current) return
+    const start = () => {
+      tuned.current = true
+      radioRef.current?.connect()
+      off()
+    }
+    const events = ["pointerup", "touchend", "keydown"] as const
+    const off = () => events.forEach((e) => window.removeEventListener(e, start))
+    events.forEach((e) => window.addEventListener(e, start))
+    return off
+  }, [saved])
 
   const exit = mode === "2d" ? next : next3d
 
@@ -91,12 +110,13 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
       {nick && <ChatRoom nick={nick} />}
       <MusicBar ref={radioRef} />
 
-      {!nick && (
+      {saved === "" && (
         <RadioGate
           onConnect={(n) => {
             // connect() va primero y dentro del click, así el navegador deja arrancar el audio
+            tuned.current = true
             radioRef.current?.connect()
-            setNick(n)
+            saveNick(n)
           }}
         />
       )}
