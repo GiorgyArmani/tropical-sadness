@@ -56,7 +56,7 @@ export default function RadioGate({ onConnect }: { onConnect: (nick: string) => 
         >
           conectar
         </button>
-        <p className="-mt-1 text-[10px] leading-relaxed text-white/45">nada se guarda · los mensajes se borran a los 2 min</p>
+        
       </form>
     </div>
   )
