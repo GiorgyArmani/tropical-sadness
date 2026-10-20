@@ -158,6 +158,9 @@ export type BoxSpec = {
   side: FaceFn
   edge?: string // color de un marco automático (la tele); sin él, el sprite trae su borde
   top?: (set: (c: number, r: number, ch: string, col: string) => void, mid: number, row0: number) => void
+  // Zona del frente que es una entrada (la pantalla de la tele, la puerta de la cripta), en celdas del
+  // sprite: [columna, fila, última columna, última fila]. Si el frente se ve, se avisa con f.portal()
+  portal?: [number, number, number, number]
 }
 
 // Agrandar sin repetir trazos: cada línea se dibuja una sola vez dentro de su bloque
@@ -227,7 +230,7 @@ export const drawBox = (f: Frame, b: BoxSpec): Kept[] => {
   const a = f.angle + b.yaw
   const ca = Math.cos(a)
   const sa = Math.sin(a)
-  type Face = { width: number; src: number; normalX: number; fn: (c: number, r: number) => Cell | null }
+  type Face = { width: number; src: number; normalX: number; fn: (c: number, r: number) => Cell | null; front?: boolean }
   const faces: Face[] = []
   const raw = (R * b.size) / (b.w * cw)
   const scale = Math.max(b.minScale, raw)
@@ -237,7 +240,7 @@ export const drawBox = (f: Frame, b: BoxSpec): Kept[] => {
   if (fw > 0) {
     faces.push(
       ca > 0
-        ? { width: fw, src: b.w, normalX: -sa, fn: (c, r) => b.front(c, r, t) }
+        ? { width: fw, src: b.w, normalX: -sa, fn: (c, r) => b.front(c, r, t), front: true }
         : { width: fw, src: b.w, normalX: sa, fn: (c, r) => b.back(b.w - 1 - c, r, t) },
     )
   }
@@ -284,6 +287,13 @@ export const drawBox = (f: Frame, b: BoxSpec): Kept[] => {
   }
 
   for (const face of faces) {
+    if (face.front && b.portal && f.portal) {
+      // Dónde quedó la entrada en la pantalla, en px
+      const [c0, r0, c1, r1] = b.portal
+      const kx = face.width / face.src
+      const ky = dh / b.h
+      f.portal({ x: (col0 + c0 * kx) * cw, y: (row0 + r0 * ky) * lh, w: (c1 - c0 + 1) * kx * cw, h: (r1 - r0 + 1) * ky * lh })
+    }
     const colsMap = blocks(face.width, face.src)
     for (let c = 0; c < face.width; c++) {
       const srcC = colsMap.from[c]

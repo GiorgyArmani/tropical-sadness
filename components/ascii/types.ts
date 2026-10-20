@@ -40,6 +40,7 @@ export type Frame = {
   project: (wx: number, wy: number, wz: number) => [number, number, number] // mundo -> [x, y, profundidad]
   ground: (wx: number, wz: number) => number // altura del terreno, px
   newShape: () => number // id para marcar las celdas de una figura en `shade`
+  portal?: (rect: { x: number; y: number; w: number; h: number }) => void // dónde se ve la entrada de la escena, px
 }
 
 // Colores del terreno de la isla: de la parte alta (hi) a la orilla (lo)
@@ -59,4 +60,7 @@ export type Scene = {
   life?: (f: Frame) => void // en el cielo y el mar, detrás de los objetos
   objects: (f: Frame) => Kept[] // objetos sobre la isla
   front?: (f: Frame) => void // delante de todo, antes del clima
+  // Una entrada (la tele, la cripta): al acercarse mucho aparece un botón encima. El objeto que la
+  // dibuja marca su zona con BoxSpec.portal
+  portal?: { label: string; aria: string }
 }

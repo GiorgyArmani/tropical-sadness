@@ -79,6 +79,7 @@ const drawTV = (f: Frame) =>
     back: tvBack,
     side: tvSide,
     edge: TV[2],
+    portal: [1, 1, 9, 5], // la pantalla
     top: (set, mid, row0) => {
       // Antenas
       set(mid - 3, row0 - 3, "\\", TV[1])
@@ -163,6 +164,7 @@ export const island: Scene = {
   id: "isla",
   name: "isla",
   label: "la isla",
+  portal: { label: "Entrar", aria: "Entrar a la tele: lleva al cementerio" },
 
   // Arena que recibe la luz del cielo
   land: (f) => {

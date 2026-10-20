@@ -71,6 +71,7 @@ const drawCrypt = (f: Frame) =>
     minScale: 1,
     front: cryptFront,
     back: cryptBack,
+    portal: [7, 4, 9, 7], // la puerta entreabierta
     side: sprite(CRYPT_SIDE, stonePaint),
     top: (set, mid, row0) => {
       // Cruz en el techo
@@ -336,6 +337,7 @@ export const cemetery: Scene = {
   id: "cementerio",
   name: "cementerio",
   label: "el cementerio",
+  portal: { label: "entrar a la cripta", aria: "Entrar a la cripta: lleva a los espacios 3D" },
   moon: { color: [255, 170, 80], full: true, size: 1.5 },
   sun: [255, 60, 35],
   water: [

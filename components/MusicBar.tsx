@@ -17,6 +17,8 @@ export type RadioHandle = { connect: () => void }
 // Todos escuchan el mismo momento: la posición sale del reloj, no de cuándo entraste
 const livePosition = (duration: number) => (Date.now() / 1000) % duration
 
+export const DUCK_EVENT = "ts-duck"
+
 export default function MusicBar({ ref }: { ref?: Ref<RadioHandle> }) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const syncPending = useRef(false)
@@ -69,9 +71,38 @@ export default function MusicBar({ ref }: { ref?: Ref<RadioHandle> }) {
     }
   }, [])
 
+  // Durante un susto del 3D la radio baja casi a nada un momento (si no, tapa el chillido) y vuelve sola.
+  // Se pide con window.dispatchEvent(new CustomEvent(DUCK_EVENT, { detail: { ms, to } })) (to: 0..1, cuánto queda)
+  const duck = useRef(1) // 1 = volumen normal
+  useEffect(() => {
+    let raf = 0
+    const onDuck = (e: Event) => {
+      const d = (e as CustomEvent).detail
+      const ms = Number(typeof d === "object" ? d?.ms : d) || 1200
+      const to = typeof d === "object" && typeof d?.to === "number" ? d.to : 0.1
+      const t0 = performance.now()
+      cancelAnimationFrame(raf)
+      const step = (now: number) => {
+        const t = now - t0
+        // Baja en 60 ms, se queda abajo y vuelve en el último tercio
+        const back = Math.min(Math.max((t - ms * 0.6) / (ms * 0.4), 0), 1)
+        duck.current = t < 60 ? 1 - (t / 60) * (1 - to) : to + (1 - to) * back
+        if (audioRef.current) audioRef.current.volume = (volume / 100) * duck.current
+        if (t < ms) raf = requestAnimationFrame(step)
+        else duck.current = 1
+      }
+      raf = requestAnimationFrame(step)
+    }
+    window.addEventListener(DUCK_EVENT, onDuck)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener(DUCK_EVENT, onDuck)
+    }
+  }, [volume])
+
   useEffect(() => {
     if (audioRef.current) {
-      audioRef.current.volume = volume / 100
+      audioRef.current.volume = (volume / 100) * duck.current
       audioRef.current.muted = muted
     }
   }, [volume, muted])

@@ -4,58 +4,35 @@
 // (un píxel por celda) y cada píxel se vuelve un carácter: la luz elige qué tan lleno es,
 // los bordes de profundidad eligen la dirección del trazo.
 //
+// Las piezas del motor están en engine/: shader (armar y compilar), camera (dónde está, qué mira y
+// la foto en ASCII), ascii (la película que revela la foto en caracteres) y lighting (luces
+// dinámicas). Este componente las junta con el juego: el laberinto, el susto y las transiciones.
+//
 // El zoom es un "dolly zoom": alejado, el lente es casi plano y todo se ve 2D; al acercarse el
 // lente se abre, aparece la profundidad, y al final la cámara entra en el espacio.
 
 import { useEffect, useImperativeHandle, useRef, type Ref } from "react"
-import { clamp, dirChar, hash, ramp, rgb } from "../ascii/math"
-import PixelIcon from "../PixelIcon"
+import { clamp, hash, rgb } from "../ascii/math"
+import PixelIcon, { type PixelIconName } from "../PixelIcon"
 import { createLiveSky } from "./live"
+import { AsciiFilm } from "./engine/ascii"
+import { Camera, dolly, sub, GLSL_CAMERA, type V3 } from "./engine/camera"
+import { GLSL_LIGHTING, LightRig } from "./engine/lighting"
+import { createShaderCache, fullscreenTriangle, GLSL_HEADER, GLSL_LIB, GLSL_RAYMARCH } from "./engine/shader"
 import { DOOR_GAP, DOORS, kindAt, sideOf, type Entry } from "./maze"
+import { createSfx } from "./sfx"
 import type { Scene3D } from "./scenes"
 
 const FPS = 30
-const FONT_PX = 8 // letra chica: más celdas, más detalle
-const MAX_CELLS = 70000
-const FOV_FLAT = 5 // grados con el zoom al mínimo: casi ortográfico
-const FOV_WIDE = 80
 const ZOOM_MAX = 1.8 // de 1 a 1.8 la cámara ya no abre el lente: avanza hacia adentro
-const RAMP = " .,:;-=+*#%@"
-
-// La paleta de la isla: de la sombra a la luz, azul profundo -> violeta -> rosa -> naranja -> arena
-const GRADE: [number, number, number][] = [
-  [16, 30, 92],
-  [96, 40, 150],
-  [235, 80, 170],
-  [255, 150, 70],
-  [255, 228, 120],
-]
-const gradeAt = (v: number): [number, number, number] => {
-  const x = clamp(v, 0, 0.999) * (GRADE.length - 1)
-  const i = Math.floor(x)
-  const f = x - i
-  const a = GRADE[i]
-  const b = GRADE[i + 1]
-  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]
-}
-const STATIC_TONES = [0.45, 0.7, 0.95].map((a) => rgb([200, 205, 215], a))
-const STATIC_PAD = 8 // la hoja de estática tiene 8 celdas de más: se corre al azar y parece otra
+// Con el zoom al mínimo el lente es casi ortográfico (5°); al máximo, gran angular
+const LENS = { fovFlat: 5, fovWide: 80, zoomMax: ZOOM_MAX }
 const OUT_MS = 550 // al irse: la cámara se mete de golpe y todo se vuelve estática
 const IN_MS = 1000 // al llegar: la estática se disuelve y el lente se abre desde plano
 const ENTRY_ZOOM = 0.35
 
-const PRELUDE = /* glsl */ `
-precision highp float;
-uniform vec2 uRes;
-uniform float uTime;
-uniform vec3 uRo;
-uniform vec3 uFw;
-uniform vec3 uRt;
-uniform vec3 uUp;
-uniform float uTan;
-uniform float uAspect;
-uniform float uStart;
-uniform float uFogRef;
+// Uniforms del mundo de este juego: el cielo en vivo, el laberinto y el susto
+const GLSL_WORLD = /* glsl */ `
 // Cielo y clima en vivo (colores de 0 a 1)
 uniform vec3 uSkyTop;
 uniform vec3 uSkyHor;
@@ -66,7 +43,6 @@ uniform vec3 uSunDir;
 uniform vec3 uLightCol;
 uniform float uClouds;
 uniform float uRain;
-uniform float uFogW;
 uniform float uFlash;
 // Laberinto: nivel del pasillo, número de la puerta que se abre y cuánto (0 cerrada, 1 abierta)
 uniform float uLevel;
@@ -76,133 +52,14 @@ uniform float uOpen;
 uniform vec4 uScare;
 uniform float uScareA;
 uniform float uDim;
-
-float hash1(float n) { return fract(sin(n) * 43758.5453); }
-float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float noise2(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(hash2(i), hash2(i + vec2(1.0, 0.0)), f.x), mix(hash2(i + vec2(0.0, 1.0)), hash2(i + vec2(1.0, 1.0)), f.x), f.y);
-}
-float fbm2(vec2 p) { return noise2(p) * 0.55 + noise2(p * 2.03) * 0.28 + noise2(p * 4.01) * 0.17; }
-float sdBox(vec3 p, vec3 b) {
-  vec3 q = abs(p) - b;
-  return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
-}
-float sdCapsule(vec3 p, vec3 a, vec3 b, float r) {
-  vec3 pa = p - a;
-  vec3 ba = b - a;
-  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
-  return length(pa - ba * h) - r;
-}
-float sdEllipsoid(vec3 p, vec3 r) {
-  float k0 = length(p / r);
-  float k1 = length(p / (r * r));
-  return k0 * (k0 - 1.0) / k1;
-}
-vec2 opU(vec2 a, vec2 b) { return a.x < b.x ? a : b; }
+// La aparición al fondo del pasillo: x = segundos desde que apareció (-1 = no está), y = qué es
+// (0 demonio, 1 un par de ojos, 2 varios)
+uniform vec2 uAppear;
 `
 
-const MAIN = /* glsl */ `
-// Normal con 4 muestras (tetraedro) en vez de 6
-vec3 calcNormal(vec3 p) {
-  const vec2 k = vec2(1.0, -1.0);
-  const float h = 0.002;
-  return normalize(k.xyy * map(p + k.xyy * h).x + k.yyx * map(p + k.yyx * h).x + k.yxy * map(p + k.yxy * h).x + k.xxx * map(p + k.xxx * h).x);
-}
-float calcAO(vec3 p, vec3 n) {
-  float o = 0.0;
-  float s = 1.0;
-  for (int i = 1; i <= 3; i++) {
-    float h = 0.08 * float(i * i);
-    o += (h - map(p + n * h).x) * s;
-    s *= 0.6;
-  }
-  return clamp(1.0 - o * 1.6, 0.0, 1.0);
-}
-void main() {
-  vec2 uv = vec2((gl_FragCoord.x - 0.5 * uRes.x) * uAspect, gl_FragCoord.y - 0.5 * uRes.y) / uRes.y;
-  vec3 rd = normalize(uFw + (uv.x * uRt + uv.y * uUp) * 2.0 * uTan);
-  float t = uStart;
-  float m = -1.0;
-  // Si el corte de maqueta cae adentro de algo sólido, primero sale de ahí
-  bool outside = map(uRo + rd * t).x > 0.0;
-  for (int i = 0; i < 96; i++) {
-    vec2 h = map(uRo + rd * t);
-    if (outside && h.x < 0.002 * (1.0 + t - uStart)) { m = h.y; break; }
-    if (!outside) { if (h.x > 0.0) outside = true; t += max(-h.x, 0.02) + 0.01; }
-    else t += h.x * 0.85;
-    if (t > uStart + MAXD) break;
-  }
-  vec3 col;
-  float depth = 1.0;
-  if (m >= 0.0) {
-    vec3 p = uRo + rd * t;
-    vec3 n = calcNormal(p);
-    col = shade(p, n, rd, m, calcAO(p, n));
-    float fd = max(t - uFogRef, 0.0);
-    col = mix(col, sky(rd), 1.0 - exp(-FOG * (1.0 + uFogW * 2.5) * fd));
-    depth = clamp(fd / MAXD, 0.0, 0.98);
-  } else col = sky(rd);
-#ifdef HAS_GLOW
-  // Cosas que brillan a través de la niebla. Donde el brillo es fuerte, la profundidad vale 254
-  // como marca: el ASCII pinta ese píxel con su color puro, sin mezclarlo con la paleta.
-  vec3 gw = glow(rd, m >= 0.0 ? t : 1e4);
-  col += gw;
-  if (max(gw.r, max(gw.g, gw.b)) > 0.5) depth = 254.0 / 255.0;
-#endif
-  gl_FragColor = vec4(clamp(col, 0.0, 1.0), depth);
-}
-`
-
-const VERT = "attribute vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }"
+const buildShader = (glsl: string) => GLSL_HEADER + GLSL_CAMERA + GLSL_WORLD + GLSL_LIGHTING + GLSL_LIB + glsl + GLSL_RAYMARCH
 
 type GL = WebGLRenderingContext
-type Program = { prog: WebGLProgram; u: Record<string, WebGLUniformLocation | null> }
-
-// Compilar un shader de raymarching tarda bastante. Se hace en dos partes: arrancar (no espera)
-// y terminar (pide el resultado). Con KHR_parallel_shader_compile el navegador compila en otro
-// hilo y se puede preguntar si ya terminó sin trabar la página.
-const startCompile = (gl: GL, scene: Scene3D): WebGLProgram => {
-  const shader = (type: number, src: string) => {
-    const s = gl.createShader(type)!
-    gl.shaderSource(s, src)
-    gl.compileShader(s)
-    return s
-  }
-  const prog = gl.createProgram()!
-  gl.attachShader(prog, shader(gl.VERTEX_SHADER, VERT))
-  gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, PRELUDE + scene.glsl + MAIN))
-  gl.bindAttribLocation(prog, 0, "a")
-  gl.linkProgram(prog)
-  return prog
-}
-
-const finishCompile = (gl: GL, scene: Scene3D, prog: WebGLProgram): Program | null => {
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-    for (const s of gl.getAttachedShaders(prog) ?? []) {
-      const log = gl.getShaderInfoLog(s)
-      if (log) console.error(`[ascii3d] ${scene.id}:`, log)
-    }
-    console.error(`[ascii3d] ${scene.id}:`, gl.getProgramInfoLog(prog))
-    return null
-  }
-  const names = [
-    "uRes", "uTime", "uRo", "uFw", "uRt", "uUp", "uTan", "uAspect", "uStart", "uFogRef",
-    "uSkyTop", "uSkyHor", "uSkyCloud", "uLight", "uStars", "uSunDir", "uLightCol", "uClouds", "uRain", "uFogW", "uFlash",
-    "uLevel", "uDoor", "uOpen", "uScare", "uScareA", "uDim",
-  ]
-  return { prog, u: Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(prog, n)])) }
-}
-
-type V3 = [number, number, number]
-const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-const norm = (a: V3): V3 => {
-  const l = Math.hypot(a[0], a[1], a[2]) || 1
-  return [a[0] / l, a[1] / l, a[2] / l]
-}
-const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 
 // La puerta que se tiene al lado en el pasillo (para mostrar "entrar")
 export type NearDoor = { door: number; kind: number }
@@ -230,7 +87,22 @@ const NEAR_M = 1.8 // a cuántos metros de una puerta se la puede abrir
 const EXIT_NEAR = 3.2 // a cuántos metros de la puerta de salida aparece "volver al pasillo"
 const PASS_M = 1.6 // cuánto hay que seguir empujando para pasar de largo una puerta con luz
 
-const HOLD_MAX = 2500 // si el shader nuevo no termina en este tiempo, se espera de una
+const SCARE_GRAB = 0.6 // metros que te jala hacia el demonio
+const SCARE_SHOVE = 2 // metros que después te avienta para atrás (desde donde te jaló)
+
+// Cruceta: cuánto se mueve y gira cada 40 ms con la flecha apretada
+// (0.05 de avance son 30 cm caminando: unos 7 m/s; 12 px de giro, unos 1.5 rad/s)
+const DPAD_MOVE = 0.05
+const DPAD_TURN = 12
+
+const HOLD_MAX = 2500
+
+// Que los sustos sean esporádicos: [mínimo, + al azar hasta], en ms (susto) o segundos (aparición)
+const SCARE_FIRST = [60000, 60000] // el primer susto, después de llegar al pasillo
+const SCARE_GAP = [180000, 120000] // entre un susto y el siguiente
+const APP_FIRST = [60, 60] // la primera aparición al fondo
+const APP_GAP = [120, 120] // entre una aparición y la siguiente
+const APP_SECS = 4.5 // cuánto se queda // si el shader nuevo no termina en este tiempo, se espera de una
 
 export default function Ascii3D({
   scene,
@@ -257,8 +129,9 @@ export default function Ascii3D({
   const layerRef = useRef<HTMLDivElement>(null)
   const wantRef = useRef(scene) // la escena pedida; el motor la muestra cuando termina la transición
   const sceneRef = useRef(scene) // la escena que se está dibujando
-  const zoomRef = useRef(0)
-  const viewRef = useRef({ yaw: scene.camera.yaw, pitch: scene.camera.pitch })
+  // La cámara vive entre renders: los botones y los gestos le piden adónde mirar (want)
+  // (se crea al montar, en el efecto del motor)
+  const camRef = useRef<Camera | null>(null)
   const failRef = useRef<HTMLParagraphElement>(null)
   const doorBtnRef = useRef<HTMLButtonElement>(null) // "abrir puerta", que el motor pone encima de la puerta
   const exitBtnRef = useRef<HTMLButtonElement>(null) // "volver al pasillo", sobre la puerta de cada escena
@@ -291,7 +164,7 @@ export default function Ascii3D({
     // camina de verdad hacia atrás (mirando para allá), no en reversa.
     if (sceneRef.current.camera.walk) {
       if (lockRef.current) return
-      const f = Math.cos(viewRef.current.yaw)
+      const f = Math.cos(camRef.current?.want.yaw ?? 0)
       const m = d * 6 * (f < 0 ? -1 : 1) * Math.max(Math.abs(f), 0.3)
       const st = stopRef.current
       if (st.held !== null) {
@@ -306,64 +179,45 @@ export default function Ascii3D({
         if (onward) return
       }
       walkRef.current += m
-    } else zoomRef.current = clamp(zoomRef.current + d, 0, ZOOM_MAX)
+    } else {
+      const w = camRef.current?.want
+      if (w) w.zoom = clamp(w.zoom + d, 0, ZOOM_MAX)
+    }
   }
+  // Girar la vista (lo usan las flechas de costado de la cruceta); el motor lo conecta al montar
+  const lookRef = useRef<(dx: number, dy: number) => void>(() => {})
   const turnAround = () => {
-    if (!lockRef.current) viewRef.current.yaw += Math.PI
+    if (!lockRef.current && camRef.current) camRef.current.want.yaw += Math.PI
   }
 
   useEffect(() => {
     const canvas = canvasRef.current!
     const glowCanvas = glowRef.current!
     const layer = layerRef.current!
-    const ctx = canvas.getContext("2d")!
-    const gctx = glowCanvas.getContext("2d")!
-    const off = document.createElement("canvas")
-    const gl = off.getContext("webgl", { premultipliedAlpha: false, antialias: false, alpha: true }) as GL | null
+    const gl = document.createElement("canvas").getContext("webgl", { premultipliedAlpha: false, antialias: false, alpha: true }) as GL | null
     if (!gl) {
       if (failRef.current) failRef.current.hidden = false
       return
     }
-    const buf = gl.createBuffer()
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf)
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW)
-    gl.enableVertexAttribArray(0)
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
-    const programs = new Map<string, Program | null>()
-    const pending = new Map<string, WebGLProgram>()
-    const parallel = gl.getExtension("KHR_parallel_shader_compile") as { COMPLETION_STATUS_KHR: number } | null
+    fullscreenTriangle(gl)
     let hitch = false // este cuadro terminó un shader: no cuenta para la calidad automática
-    const request = (s: Scene3D) => {
-      if (!programs.has(s.id) && !pending.has(s.id)) pending.set(s.id, startCompile(gl, s))
-    }
-    // ¿Está lista? Sin esperar solo responde que sí si el navegador ya terminó en segundo plano
-    const ready = (s: Scene3D, wait: boolean) => {
-      if (programs.has(s.id)) return true
-      request(s)
-      const p = pending.get(s.id)!
-      if (!wait && !(parallel && gl.getProgramParameter(p, parallel.COMPLETION_STATUS_KHR))) return false
-      pending.delete(s.id)
-      const prog = finishCompile(gl, s, p)
-      if (prog) {
-        // Un dibujo de 1 píxel obliga al driver a terminar ahora, tapado por la estática
-        gl.viewport(0, 0, 1, 1)
-        gl.useProgram(prog.prog)
-        gl.drawArrays(gl.TRIANGLES, 0, 3)
-      }
-      programs.set(s.id, prog)
-      hitch = true
-      return true
-    }
+    const shaders = createShaderCache(gl, buildShader, () => (hitch = true))
+    const { request, ready, parallel } = shaders
+    const camera = new Camera()
+    camera.reset(sceneRef.current.camera.yaw, sceneRef.current.camera.pitch)
+    camRef.current = camera
+    const rig = new LightRig()
     // Precarga: con compilación en paralelo se piden todas juntas; sin ella, una por vez y con calma
     let preloadAt = performance.now() + 1500
     const warmNext = (now: number) => {
       if (now < preloadAt) return
-      if (!sheet && W > 0) {
-        staticSheet()
+      // La hoja de estática se hace en un rato libre (tarda)
+      if (film.warm()) {
+        hitch = true
         preloadAt = now + 150
         return
       }
-      const rest = preloadRef.current.filter((s) => !programs.has(s.id))
+      const rest = preloadRef.current.filter((s) => !shaders.has(s.id))
       if (!rest.length) return
       if (parallel) {
         rest.forEach(request)
@@ -374,68 +228,17 @@ export default function Ascii3D({
         preloadAt = now + 900
       }
     }
-    // Una sola hoja de estática hecha de antemano, un poco más grande que la pantalla. En cada cuadro se
-    // muestra corrida unas celdas al azar: parece estática nueva sin tener que escribirla de nuevo.
-    // (Se rehace si cambia el tamaño.)
-    let sheet: HTMLCanvasElement | null = null
-    const staticSheet = () => {
-      if (sheet) return sheet
-      const kx = canvas.width / W
-      const ky = canvas.height / H
-      const sc = document.createElement("canvas")
-      sc.width = Math.ceil((W + STATIC_PAD * cw) * kx)
-      sc.height = Math.ceil((H + STATIC_PAD * lh) * ky)
-      const sx = sc.getContext("2d")!
-      sx.setTransform(kx, 0, 0, ky, 0, 0)
-      sx.font = ctx.font
-      sx.textBaseline = "top"
-      for (let tone = 0; tone < STATIC_TONES.length; tone++) {
-        sx.fillStyle = STATIC_TONES[tone]
-        for (let r = 0; r < rows + STATIC_PAD; r++) {
-          let line = ""
-          for (let c = 0; c < cols + STATIC_PAD; c++) {
-            line += Math.floor(hash(c * 7, r * 3) * STATIC_TONES.length) === tone ? ramp(RAMP, hash(c, r * 11)) : " "
-          }
-          sx.fillText(line, 0, r * lh)
-        }
-      }
-      sheet = sc
-      hitch = true
-      return sc
-    }
-    const drawStatic = (amount: number, tick: number) => {
-      if (W <= 0) return
-      const sh = staticSheet()
-      const ox = Math.floor(hash(tick, 3) * STATIC_PAD) * cw * (canvas.width / W)
-      const oy = Math.floor(hash(tick, 9) * STATIC_PAD) * lh * (canvas.height / H)
-      ctx.globalAlpha = Math.min(1, amount)
-      ctx.drawImage(sh, ox, oy, canvas.width, canvas.height, 0, 0, W, H)
-      ctx.globalAlpha = 1
-    }
     const liveSky = createLiveSky()
 
-    let W = 0
-    let H = 0
-    let cw = 5
-    let lh = 8
-    let cols = 0
-    let rows = 0
-    let pixels = new Uint8Array(0)
     let frame = 0
     let last = -Infinity
-    // Calidad automática: si los cuadros tardan, la letra crece un punto (menos celdas que dibujar);
-    // si sobra tiempo, vuelve a achicarse. Se revisa cada 2 segundos.
-    let coarse = 0
+    // Calidad automática (la película agranda o achica la letra): se revisa cada 2 segundos
     let cost = 0
     let costAt = performance.now()
-    let tickN = 0
-    let zoom = zoomRef.current
     let walk = 0
-    let yaw = viewRef.current.yaw
-    let pitch = viewRef.current.pitch
     // Transición: "out" se mete en la escena actual, "in" aparece la nueva desde plano
     let phase: { kind: "in" | "out" | "none"; at: number } = { kind: "in", at: performance.now() }
-    zoomRef.current = ENTRY_ZOOM
+    camera.want.zoom = ENTRY_ZOOM
     // Laberinto
     let level = wantVisit.current.entry?.level ?? 0
     let shownVisit = wantVisit.current.visit
@@ -445,48 +248,15 @@ export default function Ascii3D({
     let btnShown = false
     // Jumpscare del pasillo: a veces el demonio está detrás de quien se da la vuelta, o se cortan las luces
     // y al volver lo tiene en la cara. dark = ms a oscuras antes; pos/ang se fijan cuando aparece.
-    let scare: { at: number; dark: number; pos: V3 | null; ang: number } | null = null
+    // behind: salió detrás (te jala y te avienta fuerte); side: para qué lado se ladea la cabeza
+    let scare: { at: number; dark: number; pos: V3 | null; ang: number; behind: boolean; side: number } | null = null
     let scareReady = Infinity // antes de esto no hay susto (se arma al llegar al pasillo)
     let facingSign = 1 // hacia dónde se miraba la última vez que se miró derecho por el pasillo
-    let audio: AudioContext | null = null
-    // Un golpe de estática y un chillido que cae, hecho al vuelo (no hay archivos de sonido)
-    const stinger = () => {
-      try {
-        audio ??= new AudioContext()
-        if (audio.state === "suspended") void audio.resume()
-        const ac = audio
-        const t0 = ac.currentTime
-        const out = ac.createGain()
-        out.gain.setValueAtTime(0.0001, t0)
-        out.gain.exponentialRampToValueAtTime(0.35, t0 + 0.015)
-        out.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.1)
-        out.connect(ac.destination)
-        const len = Math.floor(ac.sampleRate * 1.1)
-        const buf = ac.createBuffer(1, len, ac.sampleRate)
-        const ch = buf.getChannelData(0)
-        for (let i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1
-        const noise = ac.createBufferSource()
-        noise.buffer = buf
-        const bp = ac.createBiquadFilter()
-        bp.type = "bandpass"
-        bp.frequency.setValueAtTime(2400, t0)
-        bp.frequency.exponentialRampToValueAtTime(300, t0 + 1)
-        bp.Q.value = 0.8
-        noise.connect(bp).connect(out)
-        noise.start(t0)
-        for (const f of [880, 933]) {
-          const o = ac.createOscillator()
-          o.type = "sawtooth"
-          o.frequency.setValueAtTime(f, t0)
-          o.frequency.exponentialRampToValueAtTime(f * 0.35, t0 + 1)
-          const g = ac.createGain()
-          g.gain.value = 0.25
-          o.connect(g).connect(out)
-          o.start(t0)
-          o.stop(t0 + 1.1)
-        }
-      } catch {} // sin audio el susto sigue igual
-    }
+    const sfx = createSfx() // el chillido del susto, la aparición y las puertas
+    // La aparición al fondo del pasillo es esporádica (si no, no deja disfrutar el recorrido)
+    let appAt = -Infinity // segundo en que empezó la última (en el reloj t)
+    let appNext = Infinity // cuándo puede salir la próxima
+    let appKind = 0 // 0 demonio, 1 un par de ojos, 2 varios
     let exitShown = false
     let exited = false // ya se salió por el final (escalera)
     const report = (d: NearDoor | null) => {
@@ -505,7 +275,8 @@ export default function Ascii3D({
       scare = null
       facingSign = 1
       // Recién llegado al pasillo hay un rato de calma antes del primer susto
-      scareReady = sc.camera.doors ? now + 25000 + Math.random() * 20000 : Infinity
+      scareReady = sc.camera.doors ? now + SCARE_FIRST[0] + Math.random() * SCARE_FIRST[1] : Infinity
+      appNext = sc.camera.doors ? (now - start) / 1000 + APP_FIRST[0] + Math.random() * APP_FIRST[1] : Infinity
       if (sc.camera.walk && sc.camera.doors && e) {
         // Se aparece justo frente a la puerta por la que se vuelve, mirándola mientras se cierra
         walk = walkRef.current = e.door * DOOR_GAP
@@ -514,37 +285,15 @@ export default function Ascii3D({
       }
     }
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    // En el celular (sobre todo Android) la pantalla muestra más oscuro: se abre más la luz
+    const phone = window.matchMedia("(pointer: coarse)").matches || /Android/i.test(navigator.userAgent)
+    const phoneBoost = phone ? 1.3 : 1
+    rig.shadows = !phone // las sombras suaves cuestan: en el celular no
+    // La película de la cámara: donde la foto se revela en ASCII
+    const film = new AsciiFilm(canvas, glowCanvas, phone)
     const start = performance.now()
 
-    const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2)
-      W = canvas.clientWidth
-      H = canvas.clientHeight
-      canvas.width = W * dpr
-      canvas.height = H * dpr
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      glowCanvas.width = Math.ceil(W / 4)
-      glowCanvas.height = Math.ceil(H / 4)
-      let px = (W < 640 ? 7 : FONT_PX) + coarse
-      const measure = () => {
-        ctx.font = `${px}px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace`
-        return ctx.measureText("M").width
-      }
-      cw = measure()
-      // Con pantallas enormes se agranda la letra para no pasarse de celdas
-      while ((W / cw) * (H / (px * 1.1)) > MAX_CELLS) {
-        px += 1
-        cw = measure()
-      }
-      ctx.textBaseline = "top"
-      lh = Math.round(px * 1.1)
-      cols = Math.ceil(W / cw)
-      rows = Math.ceil(H / lh)
-      off.width = cols
-      off.height = rows
-      pixels = new Uint8Array(cols * rows * 4)
-      sheet = null
-    }
+    const resize = () => film.resize()
 
     const draw = (now: number) => {
       const t = (now - start) / 1000
@@ -571,11 +320,7 @@ export default function Ascii3D({
           // La escena nueva cuesta distinto: la calidad automática empieza a medir de cero
           cost = 0
           costAt = now
-          viewRef.current = { yaw: nextScene.camera.yaw, pitch: nextScene.camera.pitch }
-          yaw = nextScene.camera.yaw
-          pitch = nextScene.camera.pitch
-          zoom = 0
-          zoomRef.current = ENTRY_ZOOM
+          camera.reset(nextScene.camera.yaw, nextScene.camera.pitch, 0, ENTRY_ZOOM)
           walk = 0
           walkRef.current = 0
           shownVisit = wantVisit.current.visit
@@ -593,30 +338,20 @@ export default function Ascii3D({
       // La primera escena: con compilación en paralelo no se congela la página esperándola,
       // se muestra estática hasta que esté (y la entrada empieza recién ahí)
       if (!ready(sc, !parallel || now - start > HOLD_MAX)) {
-        ctx.clearRect(0, 0, W, H)
-        drawStatic(1, Math.floor(now / 50))
+        film.clear()
+        film.drawStatic(1, Math.floor(now / 50))
         if (phase.kind === "in") phase.at = now
         return
       }
-      const program = programs.get(sc.id)
+      const program = shaders.get(sc.id)
       if (!program) return
 
       // Cámara suavizada hacia lo que pide el visitante
-      zoom += (zoomRef.current - zoom) * 0.1
-      const v = viewRef.current
-      yaw += (v.yaw - yaw) * 0.12
-      pitch += (v.pitch - pitch) * 0.12
+      camera.smooth()
+      const { yaw, pitch } = camera
       const drift = reduced || cam.walk ? 0 : Math.sin(t * 0.07) * 0.06
-      const zz = Math.min(zoom + rush, ZOOM_MAX)
-      const z1 = Math.min(zz, 1)
-      const fov = ((FOV_FLAT + (FOV_WIDE - FOV_FLAT) * z1 * z1) * Math.PI) / 180
-      const tan = Math.tan(fov / 2)
-      const inside = Math.max(0, zz - 1) / (ZOOM_MAX - 1)
-      const dist = (cam.frame / tan) * (1 - inside * 0.85)
+      const { tan, dist } = dolly(camera.zoom + rush, cam.frame, LENS)
       const a = yaw + drift
-      let ro: V3
-      let fw: V3
-      let walkTan = tan
       let ax = 0 // corrimiento de costado: entrar por una puerta
       let face = a
       let open = 0
@@ -650,7 +385,10 @@ export default function Ascii3D({
           const near = !door && phase.kind === "none" && Math.abs(walk - n0 * DOOR_GAP) < NEAR_M && kind > 0
           report(near ? { door: n, kind } : null)
           nearAt = near ? { n0, side: sideOf(n) } : null
-          if (openReq.current && near) door = { n, side: sideOf(n), kind, type: "open", at: now, fired: false }
+          if (openReq.current && near) {
+            door = { n, side: sideOf(n), kind, type: "open", at: now, fired: false }
+            sfx.door()
+          }
           openReq.current = false
           if (door) {
             const ease = (x: number) => x * x * (3 - 2 * x)
@@ -670,6 +408,11 @@ export default function Ascii3D({
             } else {
               const p = clamp((now - door.at - IN_MS * 0.4) / CLOSE_MS, 0, 1)
               open = 1 - ease(p)
+              // El chirrido y el golpe, a tiempo con la puerta que se cierra detrás
+              if (p >= 0.25 && !door.fired) {
+                door.fired = true
+                sfx.door(true)
+              }
               face = toDoor + (a - toDoor) * ease(clamp((p - 0.2) / 0.8, 0, 1))
               if (p >= 1) door = null
             }
@@ -698,33 +441,26 @@ export default function Ascii3D({
         // En la escalera se sube: la altura sigue a los escalones
         const climb = cam.walk.climb
         const lift = climb ? clamp(along / climb.run, 0, climb.steps) * climb.rise : 0
-        ro = [cam.target[0] + Math.sin(walk * 1.1) * 0.04 + ax, cam.target[1] + lift + bob, cam.target[2] - along]
+        camera.firstPerson([cam.target[0] + Math.sin(walk * 1.1) * 0.04 + ax, cam.target[1] + lift + bob, cam.target[2] - along], face, pitch, cam.walk.fov)
         // Al cruzar el final (la puerta) todo se vuelve estática y se reaparece al principio
         if (cam.walk.flash) {
           const f = cam.walk.flash
           staticAmt = Math.max(staticAmt, clamp((along - (L - f)) / f, 0, 1), clamp(1 - along / f, 0, 1))
         }
-        fw = norm([-Math.sin(face) * Math.cos(pitch), -Math.sin(pitch), -Math.cos(face) * Math.cos(pitch)])
-        walkTan = Math.tan((cam.walk.fov * Math.PI) / 360)
-      } else {
-        ro = [
-          cam.target[0] + dist * Math.cos(pitch) * Math.sin(a),
-          cam.target[1] + dist * Math.sin(pitch),
-          cam.target[2] + dist * Math.cos(pitch) * Math.cos(a),
-        ]
-        fw = norm(sub(cam.target, ro))
-      }
+      } else camera.orbit(cam.target, a, pitch, dist, tan)
+      let ro = camera.pos // el susto la sacude y la empuja
       // El susto (solo en el pasillo, y nunca con movimiento reducido)
       let scareW = 0
       let dim = 0
       if (cam.doors && !reduced) {
         const cy = Math.cos(yaw)
-        if (!scare && phase.kind === "none" && !door && now > scareReady) {
+        // (nunca pegado a una aparición)
+        if (!scare && phase.kind === "none" && !door && now > scareReady && t - appAt > 20) {
           // Se terminó de dar la vuelta: a veces estaba ahí atrás. Si no, muy de vez en cuando, se cortan las luces
           const turned = Math.abs(cy) > 0.85 && Math.sign(cy) !== facingSign
-          if ((turned && Math.random() < 0.4) || Math.random() < 1 / (FPS * 80)) {
-            scare = { at: now, dark: turned ? 0 : 700, pos: null, ang: 0 }
-            scareReady = now + 60000 + Math.random() * 60000
+          if ((turned && Math.random() < 0.4) || Math.random() < 1 / (FPS * 200)) {
+            scare = { at: now, dark: turned ? 0 : 700, pos: null, ang: 0, behind: turned, side: Math.random() < 0.5 ? -1 : 1 }
+            scareReady = now + SCARE_GAP[0] + Math.random() * SCARE_GAP[1]
           }
         }
         if (Math.abs(cy) > 0.85) facingSign = Math.sign(cy)
@@ -736,39 +472,73 @@ export default function Ascii3D({
               // Parado en el piso, a un paso, mirando a la cámara
               scare.pos = [ro[0] - Math.sin(face) * 1.35, 0, ro[2] - Math.cos(face) * 1.35]
               scare.ang = face
-              stinger()
+              sfx.scream(scare.behind ? 1 : 0.7)
             }
+            // El golpe: te jala hacia él (te mete la cara) y te avienta para atrás. Si salió detrás tuyo
+            // es mucho más fuerte. La cabeza se ladea, el lente se cierra y se abre de golpe.
+            const sec = hit / 1000
+            const power = scare.behind ? 1 : 0.45
+            const eo = (x: number) => 1 - (1 - clamp(x, 0, 1)) ** 3
+            const grab = eo(sec / 0.12)
+            const shove = eo((sec - 0.12) / 0.45)
+            const settle = 1 - eo((sec - 0.65) / 0.35) // el ladeo y el lente vuelven al final
+            const fwd = (SCARE_GRAB * grab - SCARE_SHOVE * shove) * power // metros hacia el demonio (negativo = atrás)
+            const kick = (sec < 0.12 ? -12 * grab : -12 + 30 * eo((sec - 0.12) / 0.25)) * power * settle
+            const nod = (sec < 0.12 ? -0.08 * grab : -0.08 + 0.24 * eo((sec - 0.12) / 0.3)) * power * settle
+            const roll = 0.32 * power * eo((sec - 0.1) / 0.4) * settle * scare.side
+            const k = hit < 650 ? 1 - hit / 650 : 0 // temblor
+            camera.firstPerson(
+              [
+                clamp(ro[0] - Math.sin(scare.ang) * fwd + (Math.random() - 0.5) * 0.09 * k, -1.2, 1.2),
+                ro[1] + (Math.random() - 0.5) * 0.09 * k,
+                ro[2] - Math.cos(scare.ang) * fwd,
+              ],
+              face,
+              pitch + nod,
+              (cam.walk?.fov ?? 72) + kick,
+              roll,
+            )
+            ro = camera.pos
             if (hit < 650) {
               scareW = 1
-              const k = 1 - hit / 650
-              ro[0] += (Math.random() - 0.5) * 0.07 * k
-              ro[1] += (Math.random() - 0.5) * 0.07 * k
               if (hit < 140) staticAmt = Math.max(staticAmt, 0.55)
             } else staticAmt = Math.max(staticAmt, clamp(1 - (hit - 650) / 350, 0, 1) * 0.9)
-            if (hit > 1000) scare = null
+            if (hit > 1000) {
+              // Quedas donde te aventó: el empujón pasa a ser camino recorrido (sin saltos)
+              const moved = Math.cos(scare.ang) * (SCARE_GRAB - SCARE_SHOVE) * power
+              walk += moved
+              walkRef.current += moved
+              stopRef.current.prev = walkRef.current
+              scare = null
+            }
           }
           nearAt = null
         }
         if (scare) lockRef.current = true // durante el susto no se camina ni se abren puertas
       }
 
-      const rt = norm(cross(fw, [0, 1, 0]))
-      const up = cross(rt, fw)
+      // La aparición al fondo del pasillo: de vez en cuando (APP_GAP), el demonio o unos ojos se asoman
+      // unos segundos (APP_SECS) y suena una vez. Nunca durante el susto ni mientras se abre una puerta
+      if (cam.doors && t >= appNext && phase.kind === "none" && !scare && !door) {
+        appAt = t
+        appKind = Math.random() < 0.5 ? 0 : Math.random() < 0.5 ? 1 : 2
+        appNext = t + APP_GAP[0] + Math.random() * APP_GAP[1]
+        sfx.presence(appKind === 0)
+      }
+      const appT = cam.doors ? t - appAt : -1 // segundos desde que apareció
+      const appOn = appT >= 0 && appT <= APP_SECS
 
       // Los botones de las puertas van sobre la puerta misma: se proyecta su centro a la pantalla, igual
-      // que el shader. d = de la cámara a la puerta. Devuelve si quedó a la vista.
-      const pin = (btn: HTMLElement | null, d: V3 | null, was: boolean) => {
+      // que el shader. Devuelve si quedó a la vista.
+      const pin = (btn: HTMLElement | null, at: V3 | null, was: boolean) => {
         let show = false
-        if (btn && d) {
-          const z = d[0] * fw[0] + d[1] * fw[1] + d[2] * fw[2]
-          if (z > 0.2) {
-            const k = 1 / (z * 2 * walkTan)
-            const ux = (d[0] * rt[0] + d[1] * rt[1] + d[2] * rt[2]) * k
-            const uy = (d[0] * up[0] + d[1] * up[1] + d[2] * up[2]) * k
-            const span = rows * lh
+        if (btn && at) {
+          const q = camera.project(at)
+          if (q) {
+            const sp = film.toScreen(q)
             // Si la puerta queda medio afuera, el botón se queda pegado al borde de ese lado
-            const x = clamp((cols * cw) / 2 + ux * span, 80, W - 80)
-            const y = clamp(span / 2 - uy * span, 40, H - 40)
+            const x = clamp(sp.x, 80, film.W - 80)
+            const y = clamp(sp.y, 40, film.H - 40)
             btn.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -50%)`
             show = true
           }
@@ -779,131 +549,71 @@ export default function Ascii3D({
       // En el pasillo: la puerta con luz de al lado
       btnShown = pin(
         doorBtnRef.current,
-        nearAt && cam.walk ? [nearAt.side * 1.8 - ro[0], 1.3 - ro[1], -(nearAt.n0 * DOOR_GAP - walk)] : null,
+        nearAt && cam.walk ? [nearAt.side * 1.8, 1.3, ro[2] - (nearAt.n0 * DOOR_GAP - walk)] : null,
         btnShown,
       )
       // En las otras escenas: la puerta de vuelta al pasillo (no mientras se entra o se sale, ni desde atrás)
       const ex = cam.exitDoor
-      let exD: V3 | null = null
+      let exAt: V3 | null = null
       if (ex && phase.kind === "none" && !exited) {
-        exD = sub(ex.at, ro)
+        const exD = sub(ex.at, ro)
         const len = Math.hypot(exD[0], exD[1], exD[2])
         const f = ex.facing
         // Solo frente a la puerta: cerca, y si tiene frente, mirándola de ese lado (no de costado ni de lejos)
-        if (len > EXIT_NEAR || (f && -(exD[0] * f[0] + exD[1] * f[1] + exD[2] * f[2]) / len < 0.25)) exD = null
+        if (len <= EXIT_NEAR && !(f && -(exD[0] * f[0] + exD[1] * f[1] + exD[2] * f[2]) / len < 0.25)) exAt = ex.at
       }
-      exitShown = pin(exitBtnRef.current, exD, exitShown)
+      exitShown = pin(exitBtnRef.current, exAt, exitShown)
 
-      gl.viewport(0, 0, cols, rows)
-      gl.useProgram(program.prog)
-      const u = program.u
-      gl.uniform2f(u.uRes, cols, rows)
-      gl.uniform1f(u.uTime, t)
-      gl.uniform3f(u.uRo, ...ro)
-      gl.uniform3f(u.uFw, ...fw)
-      gl.uniform3f(u.uRt, ...rt)
-      gl.uniform3f(u.uUp, ...up)
-      gl.uniform1f(u.uTan, walkTan)
-      gl.uniform1f(u.uAspect, cw / lh)
-      gl.uniform1f(u.uStart, cam.walk ? 0 : Math.max(0, dist - cam.clip))
-      gl.uniform1f(u.uFogRef, cam.walk ? 0 : Math.max(0, dist - cam.frame * 1.5))
+      program.use()
+      program.f1("uTime", t)
+      program.f1("uStart", cam.walk ? 0 : Math.max(0, dist - cam.clip))
+      program.f1("uFogRef", cam.walk ? 0 : Math.max(0, dist - cam.frame * 1.5))
+      camera.upload(program)
+      // Luces dinámicas: la escena las arma para este cuadro
+      if (sc.lights) {
+        rig.set(
+          sc.lights({
+            t,
+            cam: { pos: ro, fw: camera.fw },
+            level,
+            door: door && open > 0 ? { n: door.n, side: door.side, kind: door.kind, open } : null,
+            scare: scareW > 0.5 && scare?.pos ? scare.pos : null,
+            dim,
+          }),
+        )
+      } else rig.clear()
+      rig.upload(program)
       const sky = liveSky.read(now, t)
       // De noche se puede abrir más la exposición; de día no, o el cielo se quema
-      const exposure = (sc.exposure ?? 1) * (1 + (sc.nightBoost ?? 0) * (1 - sky.light))
+      const exposure = (sc.exposure ?? 1) * (1 + (sc.nightBoost ?? 0) * (1 - sky.light)) * phoneBoost
       const wea = sky.wea
       const dl = Math.hypot(...sky.dir)
-      gl.uniform3f(u.uSkyTop, ...sky.top)
-      gl.uniform3f(u.uSkyHor, ...sky.hor)
-      gl.uniform3f(u.uSkyCloud, ...sky.cloud)
-      gl.uniform1f(u.uLight, sky.light)
-      gl.uniform1f(u.uStars, sky.stars)
-      gl.uniform3f(u.uSunDir, sky.dir[0] / dl, sky.dir[1] / dl, sky.dir[2] / dl)
-      gl.uniform3f(u.uLightCol, ...sky.lightCol)
-      gl.uniform1f(u.uClouds, wea.clouds)
-      gl.uniform1f(u.uRain, wea.rain)
-      gl.uniform1f(u.uFogW, wea.fog)
-      gl.uniform1f(u.uFlash, sky.flash)
-      gl.uniform1f(u.uLevel, level)
-      gl.uniform1f(u.uDoor, door ? door.n : -1)
-      gl.uniform1f(u.uOpen, open)
+      program.f3("uSkyTop", sky.top)
+      program.f3("uSkyHor", sky.hor)
+      program.f3("uSkyCloud", sky.cloud)
+      program.f1("uLight", sky.light)
+      program.f1("uStars", sky.stars)
+      program.f3("uSunDir", [sky.dir[0] / dl, sky.dir[1] / dl, sky.dir[2] / dl])
+      program.f3("uLightCol", sky.lightCol)
+      program.f1("uClouds", wea.clouds)
+      program.f1("uRain", wea.rain)
+      program.f1("uFogW", wea.fog)
+      program.f1("uFlash", sky.flash)
+      program.f1("uLevel", level)
+      program.f1("uDoor", door ? door.n : -1)
+      program.f1("uOpen", open)
       const sp = scare?.pos ?? [0, 0, 0]
-      gl.uniform4f(u.uScare, sp[0], sp[1], sp[2], scareW)
-      gl.uniform1f(u.uScareA, scare?.ang ?? 0)
-      gl.uniform1f(u.uDim, dim)
-      gl.drawArrays(gl.TRIANGLES, 0, 3)
-      gl.readPixels(0, 0, cols, rows, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
-
-      // Píxeles -> caracteres (la imagen de WebGL viene de abajo hacia arriba)
+      program.f4("uScare", sp[0], sp[1], sp[2], scareW)
+      program.f1("uScareA", scare?.ang ?? 0)
+      program.f1("uDim", dim)
+      program.f2("uAppear", appOn ? appT : -1, appKind)
+      // La foto, revelada en ASCII
       const tick = Math.floor(now / 50)
-      const at = (c: number, r: number) => ((rows - 1 - clamp(r, 0, rows - 1)) * cols + clamp(c, 0, cols - 1)) * 4
-      ctx.clearRect(0, 0, W, H)
-      // La estática no se escribe letra por letra (eran miles de dibujos por cuadro y eso trababa
-      // las transiciones): las celdas tapadas se saltean y encima va una imagen de estática ya hecha.
-      for (let r = 0; r < rows; r++) {
-        let runColor = ""
-        let runStart = 0
-        let run = ""
-        const y = r * lh
-        for (let c = 0; c <= cols; c++) {
-          let ch = ""
-          let color = ""
-          if (c < cols && staticAmt > 0 && hash(c + tick * 13, r + tick * 7) < staticAmt * 0.95) {
-            if (run) run += " " // celda tapada por la estática: la escena no la dibuja
-            continue
-          }
-          if (c < cols) {
-            const i = at(c, r)
-            const R = pixels[i]
-            const G = pixels[i + 1]
-            const B = pixels[i + 2]
-            const lum = (0.299 * R + 0.587 * G + 0.114 * B) / 255
-            // Borde de profundidad: el trazo sigue el contorno
-            const gx = pixels[at(c + 1, r) + 3] - pixels[at(c - 1, r) + 3]
-            const gy = pixels[at(c, r + 1) + 3] - pixels[at(c, r - 1) + 3]
-            const d = pixels[i + 3]
-            const edge = Math.abs(gx) + Math.abs(gy) > 6 + d * 0.12
-            // Exposición baja: domina lo oscuro y solo lo iluminado llega a los caracteres llenos.
-            // Nunca vacío: hasta la sombra tiene una textura tenue.
-            const v = clamp(Math.pow(Math.min(lum * exposure, 1), 1.35) * 0.9, 0, 0.999)
-            ch = edge && lum > 0.08 ? dirChar(-gy, gx) : ramp(RAMP, Math.max(v, 0.09))
-            // Casi monocromo: el color se insinúa, la luz manda
-            const gray = lum * 255
-            const sat = sc.saturation ?? 0.5
-            let k = (0.22 + 0.85 * v) / Math.max(lum, 0.1)
-            if (edge) k *= 1.25
-            // Mezcla el color de la escena con la paleta de la isla según la luz
-            const g = gradeAt(v)
-            const gr = sc.grade ?? 0.45
-            const cr = (gray + (R - gray) * sat) * k
-            const cg = (gray + (G - gray) * sat) * k
-            const cb = (gray + (B - gray) * sat) * k
-            const gk = 0.55 + 0.75 * v
-            color = rgb([cr + (g[0] * gk - cr) * gr, cg + (g[1] * gk - cg) * gr, cb + (g[2] * gk - cb) * gr])
-            if (d === 254) {
-              // Brillo marcado por la escena (ojos): color puro y carácter lleno
-              ch = R + G + B > 330 ? "@" : "o"
-              color = rgb([R, G * 0.7, B * 0.7])
-            }
-            if (ch === " ") {
-              if (run) run += " "
-              continue
-            }
-          }
-          if (color !== runColor || c === cols) {
-            if (run.trim()) {
-              ctx.fillStyle = runColor
-              ctx.fillText(run, runStart * cw, y)
-            }
-            runColor = color
-            runStart = c
-            run = ch
-          } else run += ch
-        }
-      }
-      if (staticAmt > 0) drawStatic(staticAmt * 1.1, tick)
+      camera.shoot(program, film, { exposure, saturation: sc.saturation, grade: sc.grade, detail: sc.detail }, staticAmt, tick)
       // Lluvia por delante, solo en los espacios abiertos
       if (sc.outdoor && wea.rain > 0.02 && staticAmt < 0.5) {
-        const drops = Math.floor(cols * rows * 0.012 * wea.rain)
+        const { ctx, W, H, lh } = film
+        const drops = Math.floor(film.cols * film.rows * 0.012 * wea.rain)
         const slant = 0.15 + wea.wind * 0.35
         ctx.fillStyle = rgb([190, 205, 235], 0.55 + 0.3 * sky.light)
         const ch = slant > 0.3 ? "/" : "|"
@@ -914,11 +624,7 @@ export default function Ascii3D({
           for (let j = 0; j < 3; j++) ctx.fillText(j === 2 ? "'" : ch, x + slant * lh * j, y - lh * j)
         }
       }
-      // El halo es borroso: alcanza con actualizarlo un cuadro sí y otro no
-      if (tickN++ % 2 === 0) {
-        gctx.clearRect(0, 0, glowCanvas.width, glowCanvas.height)
-        gctx.drawImage(canvas, 0, 0, glowCanvas.width, glowCanvas.height)
-      }
+      film.glow()
     }
 
     const loop = (now: number) => {
@@ -935,7 +641,7 @@ export default function Ascii3D({
         // Volvió a verse: medir de nuevo (oculto mide cero) y aparecer desde la estática
         wakeRef.current = false
         // Solo se vuelve a medir si la pantalla cambió mientras estaba oculto (si no, la estática sirve)
-        if (canvas.clientWidth !== W || canvas.clientHeight !== H) resize()
+        if (film.stale()) resize()
         phase = { kind: "in", at: now }
         cost = 0
         costAt = now
@@ -950,13 +656,7 @@ export default function Ascii3D({
         // Durante una transición no se cambia el tamaño de letra (se vería un salto)
         if (phase.kind === "none" && cost && now - costAt > 2000) {
           costAt = now
-          if (cost > 24 && coarse < 4) {
-            coarse++
-            resize()
-          } else if (cost < 9 && coarse > 0) {
-            coarse--
-            resize()
-          }
+          film.adapt(cost)
         }
         last = now
       }
@@ -966,11 +666,7 @@ export default function Ascii3D({
     const pointers = new Map<number, { x: number; y: number }>()
     let pinch = 0
     const look = (dx: number, dy: number) => {
-      const cam = sceneRef.current.camera
-      const v = viewRef.current
-      v.yaw -= dx * 0.005
-      if (cam.yawRange) v.yaw = clamp(v.yaw, cam.yaw + cam.yawRange[0], cam.yaw + cam.yawRange[1])
-      v.pitch = clamp(v.pitch + dy * 0.004, cam.pitchRange[0], cam.pitchRange[1])
+      camera.look(dx, dy, sceneRef.current.camera)
     }
     const onDown = (e: PointerEvent) => {
       try {
@@ -1026,6 +722,10 @@ export default function Ascii3D({
         else if (cam.exitDoor && k === "e" && exitShown) calls.current.onLeave?.() // solo frente a la puerta
       }
     }
+    // En el celular el audio se destraba con un toque (el iPhone no deja sonar sin eso). En la compu se
+    // crea recién cuando hace falta: crearlo antes cambiaba la salida de audio y la radio pegaba un salto
+    window.addEventListener("touchend", sfx.unlock, { capture: true })
+    lookRef.current = look
     layer.addEventListener("pointerdown", onDown)
     layer.addEventListener("pointermove", onMove)
     layer.addEventListener("pointerup", onUp)
@@ -1039,9 +739,10 @@ export default function Ascii3D({
     return () => {
       cancelAnimationFrame(frame)
       liveSky.stop()
-      void audio?.close()
+      sfx.close()
       window.removeEventListener("resize", resize)
       window.removeEventListener("keydown", onKey)
+      window.removeEventListener("touchend", sfx.unlock, { capture: true })
       layer.removeEventListener("pointerdown", onDown)
       layer.removeEventListener("pointermove", onMove)
       layer.removeEventListener("pointerup", onUp)
@@ -1087,33 +788,66 @@ export default function Ascii3D({
       </button>
 
       <div className={`pointer-events-none absolute z-20 flex flex-col gap-2 ${controlsClassName}`}>
-        <div className="flex items-center gap-3">
-          <button type="button" onClick={() => zoomBy(-0.2)} className="ts-px-btn pointer-events-auto h-6 w-6" aria-label={scene.camera.walk ? "Retroceder" : "Alejarse"}>
-            <PixelIcon name="left" className="h-2.5 w-2.5" />
-          </button>
-          <span className="min-w-28 text-center font-mono text-[10px] uppercase tracking-[0.25em] text-white/70">{scene.camera.walk ? "atrás · adelante" : "plano · adentro"}</span>
-          <button type="button" onClick={() => zoomBy(0.2)} className="ts-px-btn pointer-events-auto h-6 w-6" aria-label={scene.camera.walk ? "Avanzar" : "Acercarse"}>
-            <PixelIcon name="right" className="h-2.5 w-2.5" />
-          </button>
+        {/* Cruceta como la de un control: arriba avanza, abajo retrocede (o acerca y aleja) y a los costados
+            gira. Mantener apretado sigue moviendo. */}
+        <div className="flex items-end gap-3">
+          <div className="grid grid-cols-3 gap-1">
+            <span />
+            <HoldButton icon="up" label={scene.camera.walk ? "Avanzar" : "Acercarse"} onStep={() => zoomBy(DPAD_MOVE)} onTap={() => zoomBy(0.2)} />
+            <span />
+            <HoldButton icon="left" label="Girar a la izquierda" onStep={() => lookRef.current(-DPAD_TURN, 0)} onTap={() => lookRef.current(-40, 0)} />
+            <HoldButton icon="down" label={scene.camera.walk ? "Retroceder" : "Alejarse"} onStep={() => zoomBy(-DPAD_MOVE)} onTap={() => zoomBy(-0.2)} />
+            <HoldButton icon="right" label="Girar a la derecha" onStep={() => lookRef.current(DPAD_TURN, 0)} onTap={() => lookRef.current(40, 0)} />
+          </div>
           {scene.camera.walk && (
             <button
               type="button"
               onClick={turnAround}
-              className="ts-px-btn pointer-events-auto h-6 px-2 font-mono text-[10px] uppercase tracking-[0.15em]"
+              className="ts-px-btn pointer-events-auto h-8 px-2 font-mono text-[10px] uppercase tracking-[0.15em]"
               aria-label="Darse la vuelta"
             >
               vuelta
             </button>
           )}
         </div>
-        <p className="hidden font-mono text-[10px] lowercase tracking-[0.15em] text-white/45 sm:block">
-          {scene.camera.doors
-            ? "scrollea o usa la rueda del mouse para moverte · arrastra para mirar alrededor (Q: darte la vuelta) · las puertas con luz se abren (E)"
-            : scene.camera.walk
-              ? "scrollea o usa la rueda del mouse para moverte · arrastra para mirar alrededor"
-              : "scrollea o usa la rueda del mouse para acercarte"}
-        </p>
       </div>
     </>
+  )
+}
+
+// Un botón de la cruceta: un toque da un paso (onTap); mantenerlo apretado repite onStep sin parar
+function HoldButton({ icon, label, onStep, onTap }: { icon: PixelIconName; label: string; onStep: () => void; onTap: () => void }) {
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const held = useRef(false) // ya se movió manteniendo: al soltar no suma el paso del toque
+  const stop = () => {
+    if (timer.current) clearInterval(timer.current)
+    timer.current = null
+  }
+  useEffect(() => stop, [])
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      className="ts-px-btn pointer-events-auto h-8 w-8 touch-none select-none"
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId)
+        held.current = false
+        stop()
+        // Si se mantiene más de un instante, empieza a repetir
+        timer.current = setInterval(() => {
+          held.current = true
+          onStep()
+        }, 40)
+      }}
+      onPointerUp={stop}
+      onPointerCancel={stop}
+      onLostPointerCapture={stop}
+      onClick={() => {
+        if (!held.current) onTap() // un toque corto (o Enter / espacio con el teclado): un paso
+        held.current = false
+      }}
+    >
+      <PixelIcon name={icon} className="h-3 w-3" />
+    </button>
   )
 }

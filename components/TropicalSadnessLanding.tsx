@@ -4,13 +4,13 @@ import { useSearchParams } from "next/navigation"
 import { useCallback, useEffect, useRef, useState } from "react"
 import MusicBar, { type RadioHandle } from "./MusicBar"
 import AsciiWorld from "./ascii/AsciiWorld"
-import { useScene } from "./ascii/scenes"
+import { SCENES, useScene } from "./ascii/scenes"
 import Ascii3D from "./ascii3d/Ascii3D"
 import { KIND, LEVELS, SCENE_OF, nextDoorOf, type Entry } from "./ascii3d/maze"
 import { SCENES_3D } from "./ascii3d/scenes"
 import PixelIcon from "./PixelIcon"
 import SocialLinks from "./SocialLinks"
-import ChatRoom from "./ChatRoom"
+import ChatRoom, { ChatToggle } from "./ChatRoom"
 import RadioGate from "./RadioGate"
 import StaticBurst, { type StaticBurstHandle } from "./StaticBurst"
 import { saveNick, useSavedNick } from "./useSavedNick"
@@ -27,6 +27,7 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
   const nick = saved ?? ""
   const tuned = useRef(false) // la radio ya arrancó con un gesto en esta visita
   const [mode, setMode] = useState<Mode>(initialMode)
+  const [chatOpen, setChatOpen] = useState(false)
   // Los dos mundos quedan montados y el que no se ve, en pausa: pasar de uno a otro no rearma nada.
   // El 3D se prepara solo en segundo plano a los pocos segundos (contexto y shaders), así el primer
   // cambio tampoco se traba.
@@ -76,6 +77,29 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
     })
   }
 
+  // Las entradas del 2D: la tele de la isla lleva al cementerio, y la cripta del cementerio a los
+  // espacios 3D (se aparece en el pasillo, frente a la puerta del cementerio que se cierra detrás)
+  const onPortal = useCallback(
+    (from: string) => {
+      if (from === "isla") {
+        const cemetery = SCENES.find((s) => s.id === "cementerio")
+        if (cemetery) go(cemetery)
+        return
+      }
+      if (from === "cementerio") {
+        setHas3d(true)
+        const door = nextDoorOf(0, KIND.cementerio)
+        setOrigin({ level: 0, door })
+        burstRef.current?.play(() => {
+          travel("pasillo", { level: 0, door })
+          setMode("3d")
+          window.history.replaceState(null, "", "/3d")
+        })
+      }
+    },
+    [go, travel],
+  )
+
   // El navegador solo deja sonar audio después de un gesto: si ya hay nombre guardado, la radio
   // arranca con el primer toque, click o tecla en cualquier parte de la página
   useEffect(() => {
@@ -95,7 +119,7 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
   return (
     <main className="ts-cursor relative min-h-dvh w-full overflow-hidden bg-black text-white">
       <div className={mode === "2d" ? "absolute inset-0" : "hidden"}>
-        <AsciiWorld scene={scene} active={mode === "2d"} />
+        <AsciiWorld scene={scene} active={mode === "2d"} onPortal={onPortal} />
       </div>
       {has3d && (
         <div className={mode === "3d" ? "absolute inset-0" : "hidden"}>
@@ -112,19 +136,29 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
         </div>
       )}
 
-      {/* Junto al chat: pasar de mundo y, en 2D, el próximo escenario. En 3D las puertas no van acá:
-          el motor pone sus botones sobre la puerta misma (abrir en el pasillo, volver en las demás escenas).
-          En celular van apilados arriba del chat; en pantallas grandes, en fila a su izquierda. */}
-      <div className="fixed bottom-[5.9rem] right-3 z-30 flex flex-col items-end gap-2 sm:bottom-[6.5rem] sm:right-8 lg:bottom-5 lg:right-[6.75rem] lg:flex-row-reverse lg:items-center">
-        <button
-          type="button"
-          onClick={switchMode}
-          aria-label={mode === "2d" ? "Pasar a los espacios 3D" : "Volver a la isla 2D"}
-          className="ts-px-btn h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em]"
-        >
-          {mode === "2d" ? "3d" : "2d"}
-          <PixelIcon name="right" className="h-2.5 w-2.5" />
-        </button>
+      {/* Pasar de mundo, el próximo escenario (en 2D) y el chat. En 3D las puertas no van acá: el motor
+          pone sus botones sobre la puerta misma. En celular van apilados arriba del botón del chat, en la
+          esquina; en pantallas grandes, en fila al centro, a la derecha de los controles de la escena. */}
+      {nick && (
+        <ChatToggle
+          open={chatOpen}
+          onClick={() => setChatOpen((o) => !o)}
+          className="fixed bottom-[3.9rem] right-3 z-40 sm:bottom-[4.5rem] sm:right-8 lg:hidden"
+        />
+      )}
+      <div className="fixed bottom-[5.9rem] right-3 z-30 flex flex-col items-end gap-2 sm:bottom-[6.5rem] sm:right-8 lg:bottom-[5.25rem] lg:left-[calc(50%+7rem)] lg:right-auto lg:flex-row lg:items-center">
+        {/* Al 3D se entra por la isla (la tele y la cripta); desde el 3D se puede volver */}
+        {mode === "3d" && (
+          <button
+            type="button"
+            onClick={switchMode}
+            aria-label="Volver a la isla 2D"
+            className="ts-px-btn h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em]"
+          >
+            2d
+            <PixelIcon name="right" className="h-2.5 w-2.5" />
+          </button>
+        )}
         {mode === "2d" ? (
           <button
             type="button"
@@ -136,6 +170,7 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
             <PixelIcon name="right" className="h-2.5 w-2.5" />
           </button>
         ) : null}
+        {nick && <ChatToggle open={chatOpen} onClick={() => setChatOpen((o) => !o)} className="hidden lg:inline-flex" />}
       </div>
 
       {/* Redes: centradas arriba en móvil, en la esquina superior derecha en desktop */}
@@ -155,7 +190,7 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
         />
       </section>
 
-      {nick && <ChatRoom nick={nick} />}
+      {nick && <ChatRoom nick={nick} open={chatOpen} onOpenChange={setChatOpen} />}
       <MusicBar ref={radioRef} />
 
       {saved === "" && (

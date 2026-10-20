@@ -88,8 +88,24 @@ const when = (at: number) => {
     : d.toLocaleDateString("es", { day: "2-digit", month: "2-digit" })
 }
 
-export default function ChatRoom({ nick }: { nick: string }) {
-  const [open, setOpen] = useState(false)
+// open / onOpenChange: si la página los pasa, ella dibuja el botón del chat donde quiera (junto a los
+// otros botones) y el chat solo muestra el panel
+export default function ChatRoom({
+  nick,
+  open: openProp,
+  onOpenChange,
+}: {
+  nick: string
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+}) {
+  const [openSelf, setOpenSelf] = useState(false)
+  const open = openProp ?? openSelf
+  const setOpen = (v: boolean | ((o: boolean) => boolean)) => {
+    const next = typeof v === "function" ? v(open) : v
+    if (onOpenChange) onOpenChange(next)
+    else setOpenSelf(next)
+  }
   const [visible, setVisible] = useState(true)
   const [status, setStatus] = useState<Status>("connecting")
   const [attempt, setAttempt] = useState(0)
@@ -192,10 +208,14 @@ export default function ChatRoom({ nick }: { nick: string }) {
 
   useEffect(() => {
     if (!open) return
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false)
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return
+      if (onOpenChange) onOpenChange(false)
+      else setOpenSelf(false)
+    }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [open])
+  }, [open, onOpenChange])
 
   useEffect(() => {
     if (open && status === "online") inputRef.current?.focus()
@@ -241,22 +261,13 @@ export default function ChatRoom({ nick }: { nick: string }) {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        aria-controls="ts-chat"
-        className="ts-px-btn fixed bottom-[3.9rem] right-3 z-40 h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em] sm:bottom-[4.5rem] sm:right-8 lg:bottom-5"
-      >
-        <PixelIcon name="chat" className="h-2.5 w-2.5" />
-        chat
-      </button>
+      {openProp === undefined && <ChatToggle open={open} onClick={() => setOpen((o) => !o)} className="fixed bottom-[3.9rem] right-3 z-40 sm:bottom-[4.5rem] sm:right-8 lg:bottom-5" />}
 
       {open && (
         <section
           id="ts-chat"
           aria-label="Chat"
-          className="ts-px-panel fixed inset-x-3 bottom-[6rem] z-40 flex h-[min(50dvh,22rem)] flex-col font-mono text-[11px] text-white sm:left-auto sm:right-8 sm:bottom-[6.75rem] sm:w-80 lg:bottom-14"
+          className="ts-px-panel fixed inset-x-3 bottom-[6rem] z-40 flex h-[min(50dvh,22rem)] flex-col font-mono text-[11px] text-white sm:left-auto sm:right-8 sm:bottom-[6.75rem] sm:w-80 lg:bottom-[7.5rem] lg:left-[calc(50%+7rem)] lg:right-auto"
         >
           <header className="flex items-center justify-between border-b border-dotted border-white/50 px-2.5 py-1.5">
             <p className="font-bold tracking-wide">
@@ -330,5 +341,21 @@ export default function ChatRoom({ nick }: { nick: string }) {
         </section>
       )}
     </>
+  )
+}
+
+// El botón que abre y cierra el chat
+export function ChatToggle({ open, onClick, className = "" }: { open: boolean; onClick: () => void; className?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-expanded={open}
+      aria-controls="ts-chat"
+      className={`ts-px-btn h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em] ${className}`}
+    >
+      <PixelIcon name="chat" className="h-2.5 w-2.5" />
+      chat
+    </button>
   )
 }

@@ -4,6 +4,22 @@
 //   vec3 sky(vec3 rd) -> color del fondo y de la niebla en esa dirección
 //   vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) -> color de la superficie
 // y las constantes FOG (densidad de la niebla) y MAXD (hasta dónde mira).
+// Las que tienen luces dinámicas (lights) las arman en JS en cada cuadro y en shade() usan
+// lighting() y lightAt() del motor (engine/lighting.ts).
+
+import type { AsciiDetail } from "./engine/ascii"
+import type { V3 } from "./engine/camera"
+import type { Light, LightSet } from "./engine/lighting"
+
+// Lo que una escena sabe del cuadro para armar sus luces
+export type LightCtx = {
+  t: number // segundos
+  cam: { pos: V3; fw: V3 }
+  level: number // nivel del pasillo
+  door: { n: number; side: number; kind: number; open: number } | null // la puerta que se abre o se cierra
+  scare: V3 | null // dónde está el demonio, si está
+  dim: number // 1 = se cortaron las luces
+}
 
 export type Scene3D = {
   id: string
@@ -15,7 +31,9 @@ export type Scene3D = {
   outdoor?: boolean // al aire libre: le llueve encima
   saturation?: number // cuánto color pasa al ASCII (0 gris, 1 todo; 0.5 por defecto)
   grade?: number // cuánto se tiñe con la paleta de la isla (0.45 por defecto)
+  detail?: AsciiDetail // "fine" (por defecto): más escalones de luz y trazos donde la luz cambia; "classic": como antes
   nightBoost?: number // exposición extra de noche (0.8 = 80% más con el cielo apagado)
+  lights?: (ctx: LightCtx) => LightSet // luces dinámicas del cuadro (ver engine/lighting.ts)
   camera: {
     target: [number, number, number] // punto que se mira
     yaw: number // giro alrededor del punto (0 = mirando hacia -z)
@@ -44,22 +62,22 @@ export type Scene3D = {
 // --- Pasillo: una oficina vacía que se repite para siempre. La rueda camina hacia adentro ---
 
 const hallway = /* glsl */ `
-#define FOG 0.055
+#define FOG 0.04
 #define MAXD 70.0
 #define APP_Z 10.0
 
-// Aparición al fondo del pasillo: cada 11 segundos se tira la moneda. A veces no hay nada,
-// a veces está el demonio, a veces solo unos ojos mirando. Aparece y se va titilando.
+// Aparición al fondo del pasillo: de vez en cuando está el demonio, o solo unos ojos mirando.
+// Aparece y se va titilando. Cuándo y qué lo decide el juego (Ascii3D) y llega en uAppear:
+// x = segundos desde que apareció (-1 = no está; dura 4.5 s), y = kind
 // kind: 0 = demonio, 1 = un par de ojos, 2 = varios pares
 float appear(out float kind) {
-  float slot = floor(uTime / 11.0);
-  float f = fract(uTime / 11.0) * 11.0;
-  kind = floor(hash1(slot * 3.1 + 7.0) * 3.0);
-  float on = step(hash1(slot * 1.7 + 2.0), 0.45) * step(2.0, f) * step(f, 6.5);
+  kind = uAppear.y;
+  float x = uAppear.x;
+  if (x < 0.0) return 0.0;
   // titileo al llegar y al irse, como una lámpara que falla
-  float edge = min(f - 2.0, 6.5 - f);
-  float flick = step(0.35, hash1(floor(uTime * 14.0) + slot));
-  return on * mix(flick, 1.0, step(0.5, edge));
+  float edge = min(x, 4.5 - x);
+  float flick = step(0.35, hash1(floor(uTime * 14.0)));
+  return mix(flick, 1.0, step(0.5, edge));
 }
 
 // Dónde están los ojos ahora: n pares, cada uno con su centro y la mitad de su separación.
@@ -72,7 +90,7 @@ vec3 appBase() { return vec3(sin(uTime * 0.11) * 0.3, 0.0, uRo.z - APP_Z); }
 vec4 eyePair(float i, float kind) {
   if (kind < 0.5) return vec4(0.0, 2.08, 0.3, 0.115); // en la cara del demonio
   if (kind < 1.5) return vec4(0.0, 1.6, 0.0, 0.14);
-  float k = i + floor(uTime / 11.0) * 9.0;
+  float k = i + floor(uTime - uAppear.x) * 9.0; // fijo mientras dura la aparición
   return vec4((hash1(k * 5.3) - 0.5) * 2.4, 0.9 + hash1(k * 2.9) * 1.3, -hash1(k * 7.7) * 3.0, 0.12);
 }
 
@@ -101,7 +119,7 @@ vec3 kindColor(float k) {
 }
 // La luz de los tubos cambia con el nivel: amarillo, rojo de emergencia, verde enfermizo
 vec3 levelLight() {
-  if (uLevel < 0.5) return vec3(1.0, 0.93, 0.72);
+  if (uLevel < 0.5) return vec3(1.0, 0.96, 0.86);
   if (uLevel < 1.5) return vec3(1.35, 0.6, 0.5);
   return vec3(0.75, 1.15, 0.85);
 }
@@ -221,53 +239,32 @@ vec3 glow(vec3 rd, float t) {
 
 // El fondo se pierde en una penumbra marrón: el pasillo se traga la luz
 vec3 sky(vec3 rd) {
-  return vec3(0.1, 0.075, 0.04) * levelTint();
-}
-
-// Algunos tubos parpadean (el patrón se repite con el pasillo, así el loop no se nota)
-float lamp(float idx) {
-  float bad = step(0.55, hash1(mod(idx, 150.0) * 7.3));
-  float flick = step(0.25, fract(sin(floor(uTime * 9.0) * 12.9 + mod(idx, 150.0)) * 43758.5));
-  return mix(1.0, flick * 0.7, bad);
+  return vec3(0.14, 0.105, 0.06) * levelTint();
 }
 
 vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) {
-  float idx = floor((p.z + 2.0) / 4.0);
-  float lz = mod(p.z + 2.0, 4.0) - 2.0;
-  vec3 d = vec3(p.x, p.y - 2.8, lz);
-  vec3 L = normalize(-d);
-  float lmp = 0.35 + 0.65 * lamp(idx);
-  // Casi sin luz de ambiente: solo se ve lo que está debajo de un tubo
-  float near = 1.4 / (1.0 + dot(d, d) * 0.6);
-  float dif = max(dot(n, L), 0.0);
-  vec3 light = levelLight() * (0.2 + near * (0.5 + 0.8 * dif)) * lmp;
-  // Antes del susto los tubos se cortan; con el demonio delante solo queda una luz roja
-  light *= 1.0 - uDim * 0.92;
-  if (uScare.w > 0.5) light = vec3(0.9, 0.07, 0.04) * (0.25 + near * (0.4 + 0.9 * dif));
-  // La puerta de al lado: de qué color es su luz y cuánto llega hasta acá
+  // La luz la arma el motor (hallwayLights): los tubos cercanos, con sombras, la puerta que se abre
+  // y, en el susto, todo rojo
+  vec3 light = lighting(p, n, rd, 0.0);
+  // La puerta de al lado: de qué color es su luz
   float dn = doorIdx(p.z);
   float dside = mod(dn, 2.0) < 0.5 ? 1.0 : -1.0;
   float zc = mod(p.z + 3.0, 6.0) - 3.0;
   vec3 kc = kindColor(doorKind(dn));
-  // Al abrirse, la luz del otro lado inunda el pasillo
-  if (isOpen(dn)) {
-    vec3 dd = p - vec3(dside * 1.8, 1.0, -dn * 6.0);
-    light += kc * uOpen * 2.2 / (1.0 + dot(dd, dd) * 0.5);
-  }
   if (m < 2.5 && abs(p.x) > 1.92) return kc * 1.8 + 0.3; // el fondo del hueco: pura luz
   if (m < 1.5) {
     // Alfombra mostaza gastada, más oscura junto a las paredes
     float worn = 0.85 + 0.3 * noise2(p.xz * 7.0) - smoothstep(1.0, 1.7, abs(p.x)) * 0.25;
     // Raya de luz que sale por debajo de las puertas que llevan a algún lado
     float under = exp(-max(0.0, 1.7 - p.x * dside) * 3.5) * smoothstep(0.62, 0.4, abs(zc));
-    return vec3(0.62, 0.52, 0.2) * levelTint() * worn * light * ao + kc * under * 0.9;
+    return vec3(0.7, 0.6, 0.34) * levelTint() * worn * light * ao + kc * under * 0.9;
   }
   if (m < 2.5) {
     // Empapelado amarillo con rayas finas y una mancha de humedad cada tanto
     if (p.y < 0.13) return vec3(0.35, 0.28, 0.16) * light;
     float stripe = 0.88 + 0.12 * step(0.5, fract(p.z * 4.0));
     float damp = smoothstep(0.65, 0.85, noise2(p.zy * vec2(0.6, 1.1) + 13.0)) * 0.3;
-    return vec3(0.9, 0.8, 0.42) * levelTint() * stripe * (1.0 - damp) * light * (0.4 + 0.6 * ao);
+    return vec3(0.76, 0.71, 0.52) * levelTint() * stripe * (1.0 - damp) * light * (0.4 + 0.6 * ao);
   }
   if (m < 3.5) {
     vec2 f = fract(p.xz * vec2(1.6, 1.0));
@@ -281,7 +278,12 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) {
     float panel = step(max(abs(q.x) - 0.13, abs(q.y) - 0.35), 0.0);
     return vec3(0.5, 0.3, 0.16) * (1.0 - panel * 0.3) * light * (0.5 + 0.5 * ao) + kc * 0.12;
   }
-  if (m < 5.5) return uScare.w > 0.5 ? vec3(0.6, 0.03, 0.02) : levelLight() * 1.3 * lamp(idx) * (1.0 - uDim * 0.95);
+  if (m < 5.5) {
+    // El tubo brilla con el color de su luz (titila con ella); los lejanos, que no tienen luz propia, parejo
+    vec4 lp = lightAt(p, 0.8);
+    if (lp.w > 0.5) return lp.rgb * 1.3;
+    return uScare.w > 0.5 ? vec3(1.2, 0.08, 0.05) : levelLight() * 1.3 * (1.0 - uDim * 0.65);
+  }
   if (m < 6.5) return vec3(0.9, 0.75, 0.35) * light + 0.15;
   // Cartelito sobre la puerta: apagado si está cerrada, del color de su destino si abre
   if (m < 7.5) return doorKind(dn) < 0.5 ? vec3(0.12, 0.14, 0.12) : kc * 1.3;
@@ -647,6 +649,81 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) {
 }
 `
 
+// --- Luces del pasillo ---
+// Misma cuenta que levelLight() y kindColor() del shader
+const LEVEL_LIGHT: V3[] = [
+  [1.0, 0.96, 0.86], // blanco de tubo, apenas cálido
+  [1.35, 0.6, 0.5], // rojo de emergencia
+  [0.75, 1.15, 0.85], // verde enfermizo
+]
+const KIND_COLOR: V3[] = [
+  [0, 0, 0],
+  [0.25, 1.0, 1.0], // isla
+  [1.0, 0.45, 0.08], // cementerio
+  [1.0, 0.97, 0.9], // escalera
+  [1.0, 0.12, 0.08], // otro pasillo
+]
+const SCARE_RED: V3 = [1.4, 0.1, 0.06] // pasada de 1: el rojo puro se ve oscuro, así la habitación se sigue leyendo
+const TUBE_GAP = 4 // un tubo cada 4 m (z = 4k), igual que el shader
+const TUBES = 7 // el resto de las luces queda para la puerta que se abre
+const fract = (x: number) => x - Math.floor(x)
+const hash1 = (n: number) => fract(Math.sin(n) * 43758.5453)
+const scale = (c: V3, k: number): V3 => [c[0] * k, c[1] * k, c[2] * k]
+
+// Algunos tubos parpadean (el patrón se repite cada 150 tubos, así el loop de 600 m no se nota)
+const tubeLamp = (k: number, t: number) => {
+  const i = ((k % 150) + 150) % 150
+  if (hash1(i * 7.3) < 0.55) return 1
+  return fract(Math.sin(Math.floor(t * 9) * 12.9 + i) * 43758.5) > 0.25 ? 0.7 : 0
+}
+
+// El pasillo es infinito pero las luces no: se encienden los tubos más cercanos, corridos hacia
+// donde se mira, y los de las puntas se desvanecen para que no aparezcan de golpe
+const hallwayLights = ({ t, cam, level, door, scare, dim }: LightCtx): LightSet => {
+  const tint = scare ? SCARE_RED : LEVEL_LIGHT[Math.min(level, LEVEL_LIGHT.length - 1)]
+  // Con el corte de luz queda algo de penumbra: la habitación se tiene que seguir leyendo
+  const on = scare ? 1 : 1 - dim * 0.65
+  const center = cam.pos[2] + cam.fw[2] * 6
+  const k0 = Math.round(center / TUBE_GAP)
+  const half = (TUBES - 1) / 2
+  const tubes: (Light & { d: number })[] = []
+  for (let j = -half; j <= half; j++) {
+    const z = (k0 + j) * TUBE_GAP
+    const fade = Math.min(Math.max((half * TUBE_GAP + 1 - Math.abs(z - center)) / 3, 0), 1)
+    const lamp = scare ? 1 : tubeLamp(k0 + j, t)
+    // Cada tubo es un cono hacia abajo: deja un charco de luz en la alfombra, como un farol
+    tubes.push({
+      type: "spot",
+      pos: [0, 2.78, z],
+      dir: [0, -1, 0],
+      angle: 0.85,
+      softness: 0.75,
+      color: scale(tint, lamp * on),
+      intensity: 2.8 * fade,
+      range: 8,
+      falloff: 0.12,
+      wrap: 0.25,
+      d: Math.abs(z - cam.pos[2]),
+    })
+  }
+  // Los dos tubos más cercanos hacen sombra (el demonio, los marcos de las puertas)
+  ;[...tubes].sort((a, b) => a.d - b.d).slice(0, 2).forEach((l) => (l.shadow = true))
+  const lights: Light[] = tubes
+  // Al abrirse una puerta, la luz del otro lado inunda el pasillo
+  if (door && door.open > 0.001) {
+    lights.push({
+      type: "point",
+      pos: [door.side * 1.8, 1.0, -door.n * 6],
+      color: KIND_COLOR[door.kind] ?? KIND_COLOR[0],
+      intensity: door.open * 3,
+      range: 12,
+      falloff: 0.5,
+      wrap: 1,
+    })
+  }
+  return { ambient: scale(tint, 0.45 * on), lights }
+}
+
 export const SCENES_3D: Scene3D[] = [
   {
     id: "pasillo",
@@ -654,9 +731,10 @@ export const SCENES_3D: Scene3D[] = [
     label: "el pasillo",
     blurb: "espacio 01 · casi todas las puertas están cerradas",
     glsl: hallway,
+    lights: hallwayLights,
     exposure: 1.4,
-    saturation: 0.8,
-    grade: 0.35,
+    saturation: 0.5,
+    grade: 0.2,
     camera: {
       target: [0, 1.45, 0],
       yaw: 0,

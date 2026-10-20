@@ -34,9 +34,19 @@ const ZOOM_MAX = 2
 const ISLAND_MAX_R = 420 // px CSS: con zoom out la isla no crece y queda sola en medio del mar
 const SKY_RAMP = " .`'-:+*"
 const SWITCH_MS = 900 // estática de tele al cambiar de escena
+const PORTAL_ZOOM = 1.5 // desde este zoom (bien cerca) aparece el botón sobre la entrada de la escena
 
-// active = false: montado pero en pausa (mientras se ven los espacios 3D), así volver no lo rearma
-export default function AsciiWorld({ scene, active = true }: { scene: Scene; active?: boolean }) {
+// active = false: montado pero en pausa (mientras se ven los espacios 3D), así volver no lo rearma.
+// onPortal: se usó la entrada de la escena (la tele de la isla, la cripta del cementerio)
+export default function AsciiWorld({
+  scene,
+  active = true,
+  onPortal,
+}: {
+  scene: Scene
+  active?: boolean
+  onPortal?: (sceneId: string) => void
+}) {
   const activeRef = useRef(active)
   const wakeRef = useRef(false)
   useEffect(() => {
@@ -50,12 +60,18 @@ export default function AsciiWorld({ scene, active = true }: { scene: Scene; act
   const zoomRef = useRef(1) // zoom objetivo de la cámara (rueda, pinch o teclas + / -)
   const panRef = useRef({ x: 0, y: 0 }) // desplazamiento objetivo de la cámara, en px del mundo
   const sceneRef = useRef(scene)
+  const portalBtnRef = useRef<HTMLButtonElement>(null) // el motor lo pone sobre la entrada y lo muestra de cerca
+  const portalRef = useRef<string | null>(null) // la escena cuya entrada está a la vista
+  const onPortalRef = useRef(onPortal)
   const [view, setView] = useState(0)
   const [clima, setClima] = useState<{ label: string; city: string } | null>(null)
 
   useEffect(() => {
     sceneRef.current = scene
   }, [scene])
+  useEffect(() => {
+    onPortalRef.current = onPortal
+  }, [onPortal])
 
   const zoomBy = (k: number) => {
     zoomRef.current = clamp(zoomRef.current * k, ZOOM_MIN, ZOOM_MAX)
@@ -69,6 +85,16 @@ export default function AsciiWorld({ scene, active = true }: { scene: Scene; act
   const resetCamera = () => {
     zoomRef.current = 1
     panRef.current = { x: 0, y: 0 }
+  }
+  const enterPortal = () => {
+    const id = portalRef.current
+    if (!id) return
+    // Se esconde ya: si no, durante la transición se alcanzaba a ver con el texto de la escena siguiente
+    portalRef.current = null
+    if (portalBtnRef.current) portalBtnRef.current.style.visibility = "hidden"
+    onPortalRef.current?.(id)
+    // Se llega al otro lado con la vista general: para la próxima entrada hay que volver a acercarse
+    resetCamera()
   }
 
   const rotate = (dir: 1 | -1) => {
@@ -86,6 +112,8 @@ export default function AsciiWorld({ scene, active = true }: { scene: Scene; act
       if (e.key === "+" || e.key === "=") zoomBy(1.25)
       if (e.key === "-") zoomBy(0.8)
       if (e.key === "0") resetCamera()
+      // E (o Enter) usa la entrada cuando su botón está a la vista
+      if ((e.key.toLowerCase() === "e" || (e.key === "Enter" && !(e.target instanceof HTMLButtonElement))) && portalRef.current) portalBtnRef.current?.click()
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
@@ -407,6 +435,7 @@ export default function AsciiWorld({ scene, active = true }: { scene: Scene; act
 
       shapeId = 0
       shade.fill(0)
+      let portalRect: { x: number; y: number; w: number; h: number } | null = null
       const f: Frame = {
         t,
         W,
@@ -444,6 +473,7 @@ export default function AsciiWorld({ scene, active = true }: { scene: Scene; act
         project,
         ground,
         newShape: () => (shapeId = (shapeId % 254) + 1),
+        portal: (r) => void (portalRect = r),
       }
       const land = scene.land(f)
 
@@ -567,6 +597,21 @@ export default function AsciiWorld({ scene, active = true }: { scene: Scene; act
       const kept = scene.objects(f)
       // Celdas guardadas que no tapó ningún objeto de adelante
       const keptVisible = kept.filter((cell) => chars[cell.i] === cell.ch && colors[cell.i] === cell.col)
+      // La entrada: de muy cerca, y con su frente a la vista, aparece el botón encima
+      {
+        const btn = portalBtnRef.current
+        const r = portalRect as { x: number; y: number; w: number; h: number } | null
+        const mx = r ? r.x + r.w / 2 : 0
+        const my = r ? r.y + r.h / 2 : 0
+        // Nunca durante un cambio de escena (la estática arranca en cero y el zoom tarda en bajar)
+        const show = !!r && !!scene.portal && zoom >= PORTAL_ZOOM && switchAt < 0 && shown === target && mx > 0 && mx < W && my > 0 && my < H
+        portalRef.current = show ? scene.id : null
+        if (btn) {
+          if (show) btn.style.transform = `translate(${clamp(mx, 90, W - 90).toFixed(1)}px, ${clamp(my, 40, H - 40).toFixed(1)}px) translate(-50%, -50%)`
+          const vis = show ? "visible" : "hidden"
+          if (btn.style.visibility !== vis) btn.style.visibility = vis
+        }
+      }
       scene.front?.(f)
       // Lo que pintó la escena se dibuja a pleno; el cielo, el suelo y el mar quedan atenuados detrás
       for (let i = 0; i < chars.length; i++) fg[i] = chars[i] !== bgChars[i] || colors[i] !== bgColors[i] ? 1 : 0
@@ -765,6 +810,21 @@ export default function AsciiWorld({ scene, active = true }: { scene: Scene; act
       </div>
 
       <div ref={layerRef} aria-hidden="true" className="absolute inset-0 touch-none select-none" />
+
+      {/* Siempre montado (el motor lo mueve y lo muestra): aparece sobre la entrada al acercarse mucho */}
+      {scene.portal && (
+        <button
+          ref={portalBtnRef}
+          type="button"
+          onClick={enterPortal}
+          aria-label={scene.portal.aria}
+          style={{ position: "absolute", left: 0, top: 0, visibility: "hidden" }}
+          className="ts-px-btn ts-px-btn--primary pointer-events-auto z-20 h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em] will-change-transform"
+        >
+          {scene.portal.label}
+          <PixelIcon name="right" className="h-2.5 w-2.5" />
+        </button>
+      )}
 
       <div className="pointer-events-none absolute z-20 flex flex-col gap-2 left-3 bottom-[3.9rem] items-start sm:inset-x-0 sm:bottom-20 sm:items-center">
         <div className="flex items-center gap-3">
