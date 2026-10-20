@@ -146,8 +146,8 @@ class EdgePass {
     gl.viewport(0, 0, w, h)
   }
 
-  // Resume la escena en celdas sobre el lienzo (cols x rows) y lo lee en out
-  finish(cols: number, rows: number, sub: number, out: Uint8Array) {
+  // Resume la escena en celdas sobre el lienzo (cols x rows). No la lee todavía: ver read()
+  render(cols: number, rows: number, sub: number) {
     const { gl, loc } = this
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     if (gl.canvas.width !== cols || gl.canvas.height !== rows) {
@@ -162,8 +162,21 @@ class EdgePass {
     gl.uniform2f(loc.uSrc, cols * sub, rows * sub)
     gl.uniform1f(loc.uSub, sub)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
-    gl.readPixels(0, 0, cols, rows, gl.RGBA, gl.UNSIGNED_BYTE, out)
+    this.pending = cols * 65536 + rows
   }
+
+  // Lee lo que dejó el render() del cuadro anterior. Leer de la GPU obliga a esperar a que termine
+  // todo lo que tiene en cola; un cuadro después ya terminó y la lectura es casi inmediata (leerlo
+  // enseguida esperaba ~13 ms, mucho en el celular). Devuelve false si no hay nada de ese tamaño
+  read(cols: number, rows: number, out: Uint8Array) {
+    if (this.pending !== cols * 65536 + rows) return false
+    this.pending = -1
+    const gl = this.gl
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.readPixels(0, 0, cols, rows, gl.RGBA, gl.UNSIGNED_BYTE, out)
+    return true
+  }
+  private pending = -1
 }
 
 const passes = new WeakMap<GL, EdgePass>()

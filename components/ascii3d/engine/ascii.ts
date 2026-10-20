@@ -3,6 +3,7 @@
 // La GPU dibuja la escena y la resume en un píxel por celda de texto, con el trazo de cada celda ya
 // decidido (edges.ts). Acá cada celda se vuelve un carácter: la luz elige qué tan lleno es, los
 // bordes eligen la dirección del trazo (- / | \) y el color se insinúa con la paleta de la isla.
+// Las letras las estampa la GPU (glyphs.ts); si no puede, se escriben con fillText como antes.
 // La cámara la usa en Camera.shoot().
 //
 // Dos niveles de detalle:
@@ -12,6 +13,7 @@
 
 import { clamp, dirChar, hash, ramp, rgb } from "../../ascii/math"
 import { EDGE_MASK, EDGE_NONE, GLOW_BIT } from "./edges"
+import { GlyphGL } from "./glyphs"
 
 export type AsciiDetail = "classic" | "fine"
 
@@ -62,11 +64,17 @@ const gradeAt = (v: number): [number, number, number] => {
 // también el canal más fuerte. Los colores parejos (amarillo, blanco, gris) quedan igual.
 const lightOf = (R: number, G: number, B: number) => Math.max(0.299 * R + 0.587 * G + 0.114 * B, 0.6 * Math.max(R, G, B)) / 255
 
-const STATIC_TONES = [0.45, 0.7, 0.95].map((a) => rgb([200, 205, 215], a))
-const STATIC_PAD = 8 // la hoja de estática tiene 8 celdas de más: se corre al azar y parece otra
+// Todas las letras que se usan, en el atlas de la GPU. La 0 es la celda vacía
+const GLYPHS = [...new Set(" " + RAMPS.fine + RAMPS.classic + STROKES + "@o")].join("")
+const GLYPH_OF = new Map([...GLYPHS].map((ch, i) => [ch, i]))
+const FONT = (px: number) => `${px}px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace`
+
+// La estática: letras grises en tres tonos, de una hoja fija corrida unas celdas al azar en cada cuadro
+const STATIC_TONES = [0.45, 0.7, 0.95]
+const STATIC_RGB = [200, 205, 215]
+const STATIC_PAD = 8
 
 export class AsciiFilm {
-  readonly ctx: CanvasRenderingContext2D // por si el juego dibuja encima (la lluvia)
   W = 0 // tamaño en px de CSS
   H = 0
   cw = 5 // ancho y alto de una celda
@@ -79,39 +87,50 @@ export class AsciiFilm {
   private raw = new Int8Array(0) // borde de cada celda antes de votar
   private edge = new Int8Array(0) // borde ya votado
   private coarse = 0 // calidad automática: cuántos puntos se agrandó la letra
-  private subFailed = false // el 2x2 ya se probó y fue lento: no se vuelve a intentar
-  creases: boolean // buscar esquinas en el shader (en el celular arranca apagado)
-  private creasesFailed = false
-  private sheet: HTMLCanvasElement | null = null
+  // Los extras de la compu. En el celular no se usan nunca: las esquinas ni siquiera están en su
+  // shader, y el 2x2 cuadruplica el trabajo de la GPU (los celulares se caían al pasar puertas)
+  creases: boolean // buscar esquinas en el shader
+  private creasesFailed: boolean // ya se probó y fue lento (o es un celular): no se vuelve a intentar
+  private subFailed: boolean // lo mismo para el 2x2
+  private cells = new Uint8Array(0) // lo que se dibuja: por celda RGB y número de letra (filas desde arriba)
+  private glyphs: GlyphGL
+  private octx: CanvasRenderingContext2D // el lienzo de encima (la lluvia, y las letras si no hay GPU)
+  private overlaySized = false // el lienzo de encima solo ocupa memoria si alguien lo usa
+  private overlayDirty = false
+  private font = ""
   private gctx: CanvasRenderingContext2D | null
   private glowTick = 0
 
   constructor(
-    readonly canvas: HTMLCanvasElement,
+    readonly canvas: HTMLCanvasElement, // el lienzo de encima: mide la pantalla y recibe la lluvia
+    textCanvas: HTMLCanvasElement, // donde la GPU estampa las letras (debajo del anterior)
     readonly glowCanvas: HTMLCanvasElement | null = null,
     readonly phone = false, // en el celular el color sale un poco más fuerte (la pantalla muestra más oscuro)
   ) {
-    this.ctx = canvas.getContext("2d")!
+    this.octx = canvas.getContext("2d")!
+    this.glyphs = new GlyphGL(textCanvas)
     this.creases = !phone
+    this.creasesFailed = phone
+    this.subFailed = phone
     this.gctx = glowCanvas?.getContext("2d") ?? null
   }
 
   // Mide la pantalla y decide cuántas celdas entran
   resize() {
-    const { canvas, ctx } = this
-    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    const { canvas, octx: ctx } = this
     const W = (this.W = canvas.clientWidth)
     const H = (this.H = canvas.clientHeight)
-    canvas.width = W * dpr
-    canvas.height = H * dpr
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    // El lienzo de encima se suelta: vuelve a tomar tamaño recién cuando alguien dibuja en él
+    canvas.width = canvas.height = 0
+    this.overlaySized = false
+    this.overlayDirty = false
     if (this.glowCanvas) {
       this.glowCanvas.width = Math.ceil(W / 4)
       this.glowCanvas.height = Math.ceil(H / 4)
     }
     let px = (W < 640 ? FONT_PX_SMALL : FONT_PX) + this.coarse
     const measure = () => {
-      ctx.font = `${px}px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace`
+      ctx.font = FONT(px)
       return ctx.measureText("M").width
     }
     this.cw = measure()
@@ -120,16 +139,34 @@ export class AsciiFilm {
       px += 1
       this.cw = measure()
     }
-    ctx.textBaseline = "top"
+    this.font = FONT(px)
     this.lh = Math.round(px * 1.1)
     this.cols = Math.ceil(W / this.cw)
     this.rows = Math.ceil(H / this.lh)
     const n = this.cols * this.rows
     this.pixels = new Uint8Array(n * 4)
     this.lum = new Float32Array(n)
-    this.raw = new Int8Array(this.cols * this.rows)
-    this.edge = new Int8Array(this.cols * this.rows)
-    this.sheet = null
+    this.raw = new Int8Array(n)
+    this.edge = new Int8Array(n)
+    this.cells = new Uint8Array(n * 4)
+    const { cols, rows, cw, lh, font } = this
+    this.glyphs.resize({ cols, rows, W, H, cw, lh, font, glyphs: GLYPHS })
+  }
+
+  // El lienzo de encima, para dibujar con 2D (la lluvia). Toma tamaño la primera vez que se pide
+  get ctx() {
+    const { canvas, octx } = this
+    if (!this.overlaySized) {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2)
+      canvas.width = Math.round(this.W * dpr)
+      canvas.height = Math.round(this.H * dpr)
+      octx.setTransform(canvas.width / this.W, 0, 0, canvas.height / this.H, 0, 0)
+      octx.font = this.font
+      octx.textBaseline = "top"
+      this.overlaySized = true
+    }
+    this.overlayDirty = true
+    return octx
   }
 
   // ¿Cambió el tamaño de la pantalla desde la última medida?
@@ -137,12 +174,11 @@ export class AsciiFilm {
     return this.canvas.clientWidth !== this.W || this.canvas.clientHeight !== this.H
   }
 
-  // Calidad automática según cuánto tardan los cuadros (ms promedio). Pensada para el celular: ahí la
-  // GPU y el CPU alcanzan para menos, así que los extras arrancan apagados y se prueban si sobra tiempo.
+  // Calidad automática según cuánto tardan los cuadros (ms promedio):
   //   - si tarda: se apaga el 2x2, después las esquinas (cada uno no se vuelve a probar) y recién
   //     después la letra crece un punto (menos celdas)
   //   - si sobra mucho tiempo: la letra se achica (más celdas)
-  //   - si sobra algo: se prenden las esquinas y después el 2x2
+  //   - si sobra algo: se prenden las esquinas y después el 2x2 (en el celular nunca: ver arriba)
   // Devuelve true si cambió.
   adapt(ms: number) {
     const room = ms < (this.phone ? 14 : 20)
@@ -177,8 +213,10 @@ export class AsciiFilm {
     return { x: (this.cols * this.cw) / 2 + q.x * span, y: span / 2 - q.y * span }
   }
 
+  // Borra lo que se dibujó encima en el cuadro anterior (la lluvia)
   clear() {
-    this.ctx.clearRect(0, 0, this.W, this.H)
+    if (this.overlayDirty) this.octx.clearRect(0, 0, this.W, this.H)
+    this.overlayDirty = false
   }
 
   // Los bordes, en dos pasos (la idea de AcerolaFX llevada a celdas):
@@ -245,17 +283,13 @@ export class AsciiFilm {
 
   // Revela los píxeles en caracteres. staticAmt: cuánta estática tapa la imagen (0..1)
   develop(look: AsciiLook, staticAmt: number, tick: number) {
-    const { ctx, pixels, lum, edge, cols, rows, cw, lh } = this
+    const { pixels, lum, edge, cols, rows } = this
     const exposure = look.exposure
     const sat = look.saturation ?? 0.5
     const gr = look.grade ?? 0.45
     const fine = (look.detail ?? "fine") === "fine"
     const RAMP = RAMPS[fine ? "fine" : "classic"]
     const colorK = this.phone ? 1.15 : 1
-    // Cada cambio de color es otra llamada a fillText, y eso es lo más caro del cuadro (en el celular,
-    // por lejos). Una celda sigue en la tira si su color está a menos de TOL del de la tira: a simple
-    // vista es el mismo color y las llamadas bajan mucho.
-    const TOL = this.phone ? 20 : 0
     // La imagen de WebGL viene de abajo hacia arriba
     const at = (c: number, r: number) => ((rows - 1 - r) * cols + c) * 4
     // Primero la luz de cada celda ya expuesta (los bordes de luz miran a los vecinos)
@@ -269,131 +303,138 @@ export class AsciiFilm {
       }
     }
     this.findEdges(fine)
-    this.clear()
-    // La estática no se escribe letra por letra (eran miles de dibujos por cuadro y eso trababa
-    // las transiciones): las celdas tapadas se saltean y encima va una imagen de estática ya hecha.
+    const cells = this.cells
+    const st = this.staticAt(staticAmt, tick)
     for (let r = 0; r < rows; r++) {
-      let runR = -999
-      let runG = 0
-      let runB = 0
-      let runStart = 0
-      let run = ""
-      const y = r * lh
-      for (let c = 0; c <= cols; c++) {
-        let ch = ""
-        let cR = 0
-        let cG = 0
-        let cB = 0
-        if (c < cols && staticAmt > 0 && hash(c + tick * 13, r + tick * 7) < staticAmt * 0.95) {
-          if (run) run += " " // celda tapada por la estática: la escena no la dibuja
+      for (let c = 0; c < cols; c++) {
+        const k = r * cols + c
+        const o = k * 4
+        // Celda tapada por la estática
+        if (st && hash(c + tick * 13, r + tick * 7) < staticAmt * 0.95) {
+          st(c, r, o)
           continue
         }
-        if (c < cols) {
-          const k = r * cols + c
-          const i = at(c, r)
-          const R = pixels[i]
-          const G = pixels[i + 1]
-          const B = pixels[i + 2]
-          const v = clamp(lum[k], 0, 0.999)
-          const isEdge = edge[k] !== NONE
-          // Nunca vacío: hasta la sombra tiene una textura tenue
-          ch = isEdge ? STROKES[edge[k]] : ramp(RAMP, Math.max(v, 0.09))
-          // Casi monocromo: el color se insinúa, la luz manda. El tono sale a brillo pleno dividiendo
-          // por el canal más fuerte (sin pasar por HSB) y después se oscurece según la luz de la celda:
-          // así un azul o un rojo puro no se pasan de 255 en un canal y no cambian de tono al recortarse
-          const m = Math.max(R, G, B, 1)
-          let kc = (0.3 + 0.95 * v) * colorK
-          if (isEdge) kc *= 1.25
-          kc = Math.min(kc, 1) // más allá de 1 se recortaría el canal fuerte y el tono se correría
-          // Mezcla el color de la escena con la paleta de la isla según la luz
-          const g = gradeAt(v)
-          const cr = (255 + ((R * 255) / m - 255) * sat) * kc
-          const cg = (255 + ((G * 255) / m - 255) * sat) * kc
-          const cb = (255 + ((B * 255) / m - 255) * sat) * kc
-          const gk = 0.55 + 0.75 * v
-          cR = cr + (g[0] * gk - cr) * gr
-          cG = cg + (g[1] * gk - cg) * gr
-          cB = cb + (g[2] * gk - cb) * gr
-          if (pixels[i + 3] & GLOW_BIT) {
-            // Brillo marcado por la escena (ojos): color puro y carácter lleno
-            ch = R + G + B > 330 ? "@" : "o"
-            cR = R
-            cG = G * 0.7
-            cB = B * 0.7
-          }
-          if (ch === " ") {
-            if (run) run += " "
-            continue
-          }
+        const i = at(c, r)
+        const R = pixels[i]
+        const G = pixels[i + 1]
+        const B = pixels[i + 2]
+        const v = clamp(lum[k], 0, 0.999)
+        const isEdge = edge[k] !== NONE
+        // Nunca vacío: hasta la sombra tiene una textura tenue
+        let ch = isEdge ? STROKES[edge[k]] : ramp(RAMP, Math.max(v, 0.09))
+        // Casi monocromo: el color se insinúa, la luz manda. El tono sale a brillo pleno dividiendo
+        // por el canal más fuerte (sin pasar por HSB) y después se oscurece según la luz de la celda:
+        // así un azul o un rojo puro no se pasan de 255 en un canal y no cambian de tono al recortarse
+        const m = Math.max(R, G, B, 1)
+        let kc = (0.3 + 0.95 * v) * colorK
+        if (isEdge) kc *= 1.25
+        kc = Math.min(kc, 1) // más allá de 1 se recortaría el canal fuerte y el tono se correría
+        // Mezcla el color de la escena con la paleta de la isla según la luz
+        const g = gradeAt(v)
+        const cr = (255 + ((R * 255) / m - 255) * sat) * kc
+        const cg = (255 + ((G * 255) / m - 255) * sat) * kc
+        const cb = (255 + ((B * 255) / m - 255) * sat) * kc
+        const gk = 0.55 + 0.75 * v
+        let cR = cr + (g[0] * gk - cr) * gr
+        let cG = cg + (g[1] * gk - cg) * gr
+        let cB = cb + (g[2] * gk - cb) * gr
+        if (pixels[i + 3] & GLOW_BIT) {
+          // Brillo marcado por la escena (ojos): color puro y carácter lleno
+          ch = R + G + B > 330 ? "@" : "o"
+          cR = R
+          cG = G * 0.7
+          cB = B * 0.7
         }
-        if (c === cols || Math.abs(cR - runR) > TOL || Math.abs(cG - runG) > TOL || Math.abs(cB - runB) > TOL) {
-          if (run.trim()) {
-            ctx.fillStyle = rgb([runR, runG, runB])
-            ctx.fillText(run, runStart * cw, y)
-          }
-          runR = cR
-          runG = cG
-          runB = cB
-          runStart = c
-          run = ch
-        } else run += ch
+        // Si un canal se pasa de 255 se divide por el más fuerte en vez de recortar (no cambia el tono)
+        const mx = Math.max(cR, cG, cB)
+        const f = mx > 255 ? 255 / mx : 1
+        cells[o] = cR * f
+        cells[o + 1] = cG * f
+        cells[o + 2] = cB * f
+        cells[o + 3] = GLYPH_OF.get(ch) ?? 0
       }
     }
-    if (staticAmt > 0) this.drawStatic(staticAmt * 1.1, tick)
+    this.present()
   }
 
-  // El halo: una copia borrosa encima. Alcanza con actualizarlo un cuadro sí y otro no
+  // La estática en una celda: letra y tono de una hoja fija corrida unas celdas al azar en cada cuadro
+  // (parece nueva sin calcular otra). Devuelve null si no hay estática
+  private staticAt(amount: number, tick: number) {
+    if (amount <= 0) return null
+    const cells = this.cells
+    const ox = Math.floor(hash(tick, 3) * STATIC_PAD)
+    const oy = Math.floor(hash(tick, 9) * STATIC_PAD)
+    const a = Math.min(1, amount * 1.1)
+    return (c: number, r: number, o: number) => {
+      const sc = c + ox
+      const sr = r + oy
+      const tone = STATIC_TONES[Math.floor(hash(sc * 7, sr * 3) * STATIC_TONES.length)] * a
+      cells[o] = STATIC_RGB[0] * tone
+      cells[o + 1] = STATIC_RGB[1] * tone
+      cells[o + 2] = STATIC_RGB[2] * tone
+      cells[o + 3] = GLYPH_OF.get(ramp(RAMPS.classic, hash(sc, sr * 11))) ?? 0
+    }
+  }
+
+  // Pantalla de estática sola (mientras la escena se prepara)
+  drawStatic(amount: number, tick: number) {
+    const { cols, rows, cells } = this
+    const st = this.staticAt(amount, tick)
+    if (this.W <= 0 || !st) return
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const o = (r * cols + c) * 4
+        if (hash(c + tick * 13, r + tick * 7) < amount * 0.95) st(c, r, o)
+        else cells[o + 3] = 0
+      }
+    }
+    this.present()
+  }
+
+  // Muestra las celdas: las estampa la GPU; si no puede, se escriben con fillText en el lienzo de
+  // encima, juntando en una tira las celdas seguidas del mismo color
+  private present() {
+    this.clear()
+    if (this.glyphs.draw(this.cells)) return
+    const { cells, cols, rows, cw, lh } = this
+    const ctx = this.ctx
+    for (let r = 0; r < rows; r++) {
+      let run = ""
+      let runColor = ""
+      let runStart = 0
+      for (let c = 0; c <= cols; c++) {
+        const o = (r * cols + c) * 4
+        const g = c < cols ? cells[o + 3] : 0
+        const color = g ? rgb([cells[o], cells[o + 1], cells[o + 2]]) : ""
+        if (!g || color !== runColor) {
+          if (run.trim()) {
+            ctx.fillStyle = runColor
+            ctx.fillText(run, runStart * cw, r * lh)
+          }
+          run = g ? GLYPHS[g] : ""
+          runColor = color
+          runStart = c
+        } else run += GLYPHS[g]
+      }
+    }
+  }
+
+  // El halo: una copia borrosa encima. Alcanza con actualizarlo un cuadro sí y otro no.
+  // (Se copia en el mismo cuadro en que se dibujaron las letras: después la GPU puede borrarlas)
   glow() {
     const g = this.gctx
     if (!g || !this.glowCanvas || this.glowTick++ % 2) return
     g.clearRect(0, 0, this.glowCanvas.width, this.glowCanvas.height)
-    g.drawImage(this.canvas, 0, 0, this.glowCanvas.width, this.glowCanvas.height)
+    const src = this.glyphs.ok ? this.glyphs.canvas : this.canvas
+    if (src.width) g.drawImage(src, 0, 0, this.glowCanvas.width, this.glowCanvas.height)
   }
 
-  // ¿Ya está hecha la hoja de estática? Si no, la hace (tarda: conviene llamarla en un rato libre)
+  // Antes había que preparar una hoja de estática en un rato libre; ahora la estática sale sola
   warm() {
-    if (this.sheet || this.W <= 0) return false
-    this.staticSheet()
-    return true
+    return false
   }
 
-  // Una sola hoja de estática hecha de antemano, un poco más grande que la pantalla. En cada cuadro se
-  // muestra corrida unas celdas al azar: parece estática nueva sin tener que escribirla de nuevo.
-  // (Se rehace si cambia el tamaño.)
-  private staticSheet() {
-    if (this.sheet) return this.sheet
-    const { canvas, W, H, cw, lh, cols, rows } = this
-    const kx = canvas.width / W
-    const ky = canvas.height / H
-    const sc = document.createElement("canvas")
-    sc.width = Math.ceil((W + STATIC_PAD * cw) * kx)
-    sc.height = Math.ceil((H + STATIC_PAD * lh) * ky)
-    const sx = sc.getContext("2d")!
-    sx.setTransform(kx, 0, 0, ky, 0, 0)
-    sx.font = this.ctx.font
-    sx.textBaseline = "top"
-    for (let tone = 0; tone < STATIC_TONES.length; tone++) {
-      sx.fillStyle = STATIC_TONES[tone]
-      for (let r = 0; r < rows + STATIC_PAD; r++) {
-        let line = ""
-        for (let c = 0; c < cols + STATIC_PAD; c++) {
-          line += Math.floor(hash(c * 7, r * 3) * STATIC_TONES.length) === tone ? ramp(RAMPS.classic, hash(c, r * 11)) : " "
-        }
-        sx.fillText(line, 0, r * lh)
-      }
-    }
-    this.sheet = sc
-    return sc
-  }
-
-  drawStatic(amount: number, tick: number) {
-    const { canvas, ctx, W, H } = this
-    if (W <= 0) return
-    const sh = this.staticSheet()
-    const ox = Math.floor(hash(tick, 3) * STATIC_PAD) * this.cw * (canvas.width / W)
-    const oy = Math.floor(hash(tick, 9) * STATIC_PAD) * this.lh * (canvas.height / H)
-    ctx.globalAlpha = Math.min(1, amount)
-    ctx.drawImage(sh, ox, oy, canvas.width, canvas.height, 0, 0, W, H)
-    ctx.globalAlpha = 1
+  dispose() {
+    this.glyphs.dispose()
   }
 }

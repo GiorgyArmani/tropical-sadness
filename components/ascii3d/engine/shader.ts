@@ -96,7 +96,10 @@ void main() {
     // (distancia ~0); si hay una esquina cerca, se mete en la otra pared o sale al aire.
     // Son 4 consultas al mundo (con normales eran 8), y solo donde hay luz: en lo oscuro el trazo no
     // se dibuja igual (edges.ts), y en el laberinto de noche eso es casi toda la pantalla.
+    // Solo en la compu (CREASES): cada consulta copia el mundo entero adentro del shader, y en el
+    // celular un shader así de grande hacía caer la página.
     float crease = 0.0;
+#ifdef CREASES
     if (uCrease > 0.5 && max(dot(col, vec3(0.299, 0.587, 0.114)), 0.6 * max(col.r, max(col.g, col.b))) > 0.06) {
       float cell = t * 2.0 * uTan / uRes.y;
       vec3 ta = normalize(uRt - n * dot(uRt, n) + 1e-4) * cell;
@@ -104,6 +107,7 @@ void main() {
       float off = max(max(abs(map(p + ta).x), abs(map(p - ta).x)), max(abs(map(p + tb).x), abs(map(p - tb).x)));
       if (off > 0.45 * cell) crease = 1.0;
     }
+#endif
     // La profundidad va en los bits altos (0..244, par) y la esquina en el bit más bajo.
     // 254 queda para el brillo y 255 para el cielo.
     depth = (floor(clamp(fd / MAXD, 0.0, 0.98) * 125.0) * 2.0 + crease) / 255.0;

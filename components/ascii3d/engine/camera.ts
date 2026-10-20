@@ -126,17 +126,20 @@ export class Camera {
   shoot(p: Program, film: AsciiFilm, look: AsciiLook, staticAmt = 0, tick = 0) {
     const gl = p.gl
     const { cols, rows, sub } = film
-    // La escena va a una imagen aparte de sub x sub píxeles por celda; edges.ts la resume en celdas
     const pass = edgePass(gl)
+    // Se revela la foto del cuadro anterior: la GPU ya la terminó y leerla no hace esperar (la
+    // película va un cuadro atrás, 33 ms, que no se nota). Recién después se saca la de ahora
+    if (pass.read(cols, rows, film.pixels)) film.develop(look, staticAmt, tick)
+    else film.clear()
+    // La escena va a una imagen aparte de sub x sub píxeles por celda; edges.ts la resume en celdas
     pass.begin(cols, rows, sub)
     p.f2("uRes", cols * sub, rows * sub)
     p.f1("uAspect", film.cw / film.lh) // las celdas no son cuadradas
     p.f1("uCrease", film.creases ? 1 : 0)
     this.upload(p)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
-    pass.finish(cols, rows, sub, film.pixels)
+    pass.render(cols, rows, sub)
     p.use() // el programa de la escena sigue en uso para el cuadro que viene
-    film.develop(look, staticAmt, tick)
   }
 
   upload(p: Program) {

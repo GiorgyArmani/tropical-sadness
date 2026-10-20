@@ -132,6 +132,7 @@ export default function Ascii3D({
   const lockRef = useRef(false) // mientras una puerta se abre o se cierra no se camina
   useImperativeHandle(ref, () => ({ open: () => void (openReq.current = true) }))
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const textRef = useRef<HTMLCanvasElement>(null) // donde la GPU estampa las letras
   const glowRef = useRef<HTMLCanvasElement>(null)
   const layerRef = useRef<HTMLDivElement>(null)
   const wantRef = useRef(scene) // la escena pedida; el motor la muestra cuando termina la transición
@@ -201,14 +202,21 @@ export default function Ascii3D({
     const canvas = canvasRef.current!
     const glowCanvas = glowRef.current!
     const layer = layerRef.current!
-    const gl = document.createElement("canvas").getContext("webgl", { premultipliedAlpha: false, antialias: false, alpha: true }) as GL | null
+    // preserveDrawingBuffer: la foto de la escena se lee un cuadro después (Camera.shoot) y tiene que
+    // seguir ahí. El lienzo es chico (una celda por píxel), así que no cuesta
+    const gl = document.createElement("canvas").getContext("webgl", { premultipliedAlpha: false, antialias: false, alpha: true, preserveDrawingBuffer: true }) as GL | null
     if (!gl) {
       if (failRef.current) failRef.current.hidden = false
       return
     }
     fullscreenTriangle(gl)
+    // En el celular (sobre todo Android) la pantalla muestra más oscuro: se abre más la luz
+    const phone = window.matchMedia("(pointer: coarse)").matches || /Android/i.test(navigator.userAgent)
     let hitch = false // este cuadro terminó un shader: no cuenta para la calidad automática
-    const shaders = createShaderCache(gl, buildShader, () => (hitch = true))
+    // En el celular los shaders se arman sin la búsqueda de esquinas: son 4 copias más del mundo
+    // adentro del shader, y en la GPU del celular un shader así de grande hacía caer la página
+    // al entrar a una escena (Safari y Chrome lo compilan recién ahí)
+    const shaders = createShaderCache(gl, (glsl) => (phone ? "" : "#define CREASES\n") + buildShader(glsl), () => (hitch = true))
     const { request, ready, parallel } = shaders
     const camera = new Camera()
     camera.reset(sceneRef.current.camera.yaw, sceneRef.current.camera.pitch)
@@ -292,12 +300,10 @@ export default function Ascii3D({
       }
     }
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    // En el celular (sobre todo Android) la pantalla muestra más oscuro: se abre más la luz
-    const phone = window.matchMedia("(pointer: coarse)").matches || /Android/i.test(navigator.userAgent)
     const phoneBoost = phone ? 1.3 : 1
     rig.shadows = !phone // las sombras suaves cuestan: en el celular no
     // La película de la cámara: donde la foto se revela en ASCII
-    const film = new AsciiFilm(canvas, glowCanvas, phone)
+    const film = new AsciiFilm(canvas, textRef.current!, glowCanvas, phone)
     const start = performance.now()
 
     const resize = () => film.resize()
@@ -764,12 +770,14 @@ export default function Ascii3D({
       layer.removeEventListener("pointercancel", onUp)
       layer.removeEventListener("wheel", onWheel)
       gl.getExtension("WEBGL_lose_context")?.loseContext()
+      film.dispose()
     }
   }, [])
 
   return (
     <>
       <div aria-hidden="true" className="pointer-events-none absolute inset-0">
+        <canvas ref={textRef} className="absolute inset-0 h-full w-full" />
         <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
         <canvas ref={glowRef} className="absolute inset-0 h-full w-full opacity-45 mix-blend-screen blur-md" />
         <div className="ascii-scanlines absolute inset-0" />
