@@ -655,7 +655,9 @@ export default function Ascii3D({
         cost = 0
         costAt = now
       }
-      if (now - last >= 1000 / FPS) {
+      // Con margen: a 60 o 120 Hz los refrescos llegan cada 33,33 ms y a veces una milésima antes del
+      // límite exacto; sin margen ese cuadro se salteaba y la animación caía a ~20 por segundo
+      if (now - last >= 1000 / FPS - 3) {
         const t0 = performance.now()
         hitch = false
         draw(now)

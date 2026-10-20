@@ -8,6 +8,7 @@
 // shoot() saca la foto: la GPU dibuja la escena y la película (ascii.ts) la revela en caracteres.
 
 import type { AsciiFilm, AsciiLook } from "./ascii"
+import { edgePass } from "./edges"
 import type { Program } from "./shader"
 
 export type V3 = [number, number, number]
@@ -124,17 +125,17 @@ export class Camera {
   // ASCII sobre la película. staticAmt: cuánta estática la tapa; tick: el reloj de la estática.
   shoot(p: Program, film: AsciiFilm, look: AsciiLook, staticAmt = 0, tick = 0) {
     const gl = p.gl
-    const { cols, rows } = film
-    if (gl.canvas.width !== cols || gl.canvas.height !== rows) {
-      gl.canvas.width = cols
-      gl.canvas.height = rows
-    }
-    gl.viewport(0, 0, cols, rows)
-    p.f2("uRes", cols, rows)
+    const { cols, rows, sub } = film
+    // La escena va a una imagen aparte de sub x sub píxeles por celda; edges.ts la resume en celdas
+    const pass = edgePass(gl)
+    pass.begin(cols, rows, sub)
+    p.f2("uRes", cols * sub, rows * sub)
     p.f1("uAspect", film.cw / film.lh) // las celdas no son cuadradas
+    p.f1("uCrease", film.creases ? 1 : 0)
     this.upload(p)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
-    gl.readPixels(0, 0, cols, rows, gl.RGBA, gl.UNSIGNED_BYTE, film.pixels)
+    pass.finish(cols, rows, sub, film.pixels)
+    p.use() // el programa de la escena sigue en uso para el cuadro que viene
     film.develop(look, staticAmt, tick)
   }
 

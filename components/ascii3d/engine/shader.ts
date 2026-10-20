@@ -17,6 +17,7 @@ uniform float uAspect;
 uniform float uStart; // desde dónde empieza a mirar el rayo (corte tipo maqueta)
 uniform float uFogRef; // la niebla cuenta desde acá
 uniform float uFogW; // niebla extra del clima (0 nada)
+uniform float uCrease; // 1 busca esquinas (la calidad automática la apaga si no alcanza: AsciiFilm.adapt)
 // La escena la declara más abajo; los módulos de antes (luces) ya la pueden usar
 vec2 map(vec3 p);
 `
@@ -89,7 +90,23 @@ void main() {
     col = shade(p, n, rd, m, calcAO(p, n));
     float fd = max(t - uFogRef, 0.0);
     col = mix(col, sky(rd), 1.0 - exp(-FOG * (1.0 + uFogW * 2.5) * fd));
-    depth = clamp(fd / MAXD, 0.0, 0.98);
+    // Esquina (idea de AcerolaFX: bordes por normales). Donde dos paredes se juntan la profundidad
+    // casi no salta, así que el borde de profundidad no la ve. Se da un paso de un píxel de costado,
+    // a los cuatro lados, pegado a la superficie: en una pared lisa el paso sigue sobre ella
+    // (distancia ~0); si hay una esquina cerca, se mete en la otra pared o sale al aire.
+    // Son 4 consultas al mundo (con normales eran 8), y solo donde hay luz: en lo oscuro el trazo no
+    // se dibuja igual (edges.ts), y en el laberinto de noche eso es casi toda la pantalla.
+    float crease = 0.0;
+    if (uCrease > 0.5 && max(dot(col, vec3(0.299, 0.587, 0.114)), 0.6 * max(col.r, max(col.g, col.b))) > 0.06) {
+      float cell = t * 2.0 * uTan / uRes.y;
+      vec3 ta = normalize(uRt - n * dot(uRt, n) + 1e-4) * cell;
+      vec3 tb = normalize(uUp - n * dot(uUp, n) + 1e-4) * cell;
+      float off = max(max(abs(map(p + ta).x), abs(map(p - ta).x)), max(abs(map(p + tb).x), abs(map(p - tb).x)));
+      if (off > 0.45 * cell) crease = 1.0;
+    }
+    // La profundidad va en los bits altos (0..244, par) y la esquina en el bit más bajo.
+    // 254 queda para el brillo y 255 para el cielo.
+    depth = (floor(clamp(fd / MAXD, 0.0, 0.98) * 125.0) * 2.0 + crease) / 255.0;
   } else col = sky(rd);
 #ifdef HAS_GLOW
   // Cosas que brillan a través de la niebla. Donde el brillo es fuerte, la profundidad vale 254
