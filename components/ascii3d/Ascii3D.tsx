@@ -11,7 +11,7 @@
 // El zoom es un "dolly zoom": alejado, el lente es casi plano y todo se ve 2D; al acercarse el
 // lente se abre, aparece la profundidad, y al final la cámara entra en el espacio.
 
-import { useEffect, useImperativeHandle, useRef, type Ref } from "react"
+import { useEffect, useImperativeHandle, useRef, type PointerEvent as ReactPointerEvent, type Ref } from "react"
 import { clamp, hash, rgb } from "../ascii/math"
 import PixelIcon, { type PixelIconName } from "../PixelIcon"
 import { createLiveSky } from "./live"
@@ -90,10 +90,14 @@ const PASS_M = 1.6 // cuánto hay que seguir empujando para pasar de largo una p
 const SCARE_GRAB = 0.6 // metros que te jala hacia el demonio
 const SCARE_SHOVE = 2 // metros que después te avienta para atrás (desde donde te jaló)
 
-// Cruceta: cuánto se mueve y gira cada 40 ms con la flecha apretada
+// Cruceta (compu): cuánto se mueve y gira cada 40 ms con la flecha apretada
 // (0.05 de avance son 30 cm caminando: unos 7 m/s; 12 px de giro, unos 1.5 rad/s)
 const DPAD_MOVE = 0.05
 const DPAD_TURN = 12
+// Joystick (celular): a fondo, cuánto avanza y gira por segundo (lo mismo que la cruceta)
+// (1.25 de avance por segundo son unos 7 m/s caminando; 300 px de giro, unos 1.5 rad/s)
+const PAD_MOVE = 1.25
+const PAD_TURN = 300
 
 const HOLD_MAX = 2500
 
@@ -725,6 +729,9 @@ export default function Ascii3D({
     // En el celular el audio se destraba con un toque (el iPhone no deja sonar sin eso). En la compu se
     // crea recién cuando hace falta: crearlo antes cambiaba la salida de audio y la radio pegaba un salto
     window.addEventListener("touchend", sfx.unlock, { capture: true })
+    // Safari en el iPhone ignora el "sin zoom" de la página: pellizcar la acercaba en vez de mover la escena
+    const noGesture = (e: Event) => e.preventDefault()
+    document.addEventListener("gesturestart", noGesture)
     lookRef.current = look
     layer.addEventListener("pointerdown", onDown)
     layer.addEventListener("pointermove", onMove)
@@ -743,6 +750,7 @@ export default function Ascii3D({
       window.removeEventListener("resize", resize)
       window.removeEventListener("keydown", onKey)
       window.removeEventListener("touchend", sfx.unlock, { capture: true })
+      document.removeEventListener("gesturestart", noGesture)
       layer.removeEventListener("pointerdown", onDown)
       layer.removeEventListener("pointermove", onMove)
       layer.removeEventListener("pointerup", onUp)
@@ -788,10 +796,11 @@ export default function Ascii3D({
       </button>
 
       <div className={`pointer-events-none absolute z-20 flex flex-col gap-2 ${controlsClassName}`}>
-        {/* Cruceta como la de un control: arriba avanza, abajo retrocede (o acerca y aleja) y a los costados
-            gira. Mantener apretado sigue moviendo. */}
+        {/* En la compu, cruceta: arriba avanza, abajo retrocede (o acerca y aleja) y a los costados gira;
+            mantener apretado sigue moviendo. En el celular, joystick: se arrastra con el pulgar sin soltar
+            (tocar botón por botón hacía que el dedo resbalara a la página y la recargara). */}
         <div className="flex items-end gap-3">
-          <div className="grid grid-cols-3 gap-1">
+          <div className="grid grid-cols-3 gap-1 pointer-coarse:hidden">
             <span />
             <HoldButton icon="up" label={scene.camera.walk ? "Avanzar" : "Acercarse"} onStep={() => zoomBy(DPAD_MOVE)} onTap={() => zoomBy(0.2)} />
             <span />
@@ -799,6 +808,13 @@ export default function Ascii3D({
             <HoldButton icon="down" label={scene.camera.walk ? "Retroceder" : "Alejarse"} onStep={() => zoomBy(-DPAD_MOVE)} onTap={() => zoomBy(-0.2)} />
             <HoldButton icon="right" label="Girar a la derecha" onStep={() => lookRef.current(DPAD_TURN, 0)} onTap={() => lookRef.current(40, 0)} />
           </div>
+          <Joystick
+            label={scene.camera.walk ? "Joystick: arriba avanza, abajo retrocede, a los lados gira" : "Joystick: arriba acerca, abajo aleja, a los lados gira"}
+            onMove={(x, y, dt) => {
+              if (y) zoomBy(-y * PAD_MOVE * dt)
+              if (x) lookRef.current(x * PAD_TURN * dt, 0)
+            }}
+          />
           {scene.camera.walk && (
             <button
               type="button"
@@ -849,5 +865,86 @@ function HoldButton({ icon, label, onStep, onTap }: { icon: PixelIconName; label
     >
       <PixelIcon name={icon} className="h-3 w-3" />
     </button>
+  )
+}
+
+// Joystick: mientras el dedo lo arrastra, llama a onMove en cada cuadro con x, y entre -1 y 1
+// (y positivo hacia abajo) y los segundos que pasaron. Al soltar, la perilla vuelve al centro.
+const PAD_R = 34 // px que puede alejarse la perilla del centro
+const PAD_DEAD = 0.15 // zona muerta en el centro, para que un dedo quieto no camine solo
+
+function Joystick({ label, onMove }: { label: string; onMove: (x: number, y: number, dt: number) => void }) {
+  const knobRef = useRef<HTMLSpanElement>(null)
+  const move = useRef(onMove)
+  useEffect(() => {
+    move.current = onMove
+  })
+  const drag = useRef<{ id: number; cx: number; cy: number; x: number; y: number } | null>(null)
+  const frame = useRef(0)
+  useEffect(() => () => cancelAnimationFrame(frame.current), [])
+
+  const curve = (v: number) => {
+    // Fuera de la zona muerta, suave al principio y rápido a fondo
+    const a = Math.max(0, (Math.abs(v) - PAD_DEAD) / (1 - PAD_DEAD))
+    return Math.sign(v) * a * a
+  }
+  const tick = (prev: number) => (now: number) => {
+    const d = drag.current
+    if (!d) return
+    const dt = Math.min((now - prev) / 1000, 0.1)
+    move.current(curve(d.x), curve(d.y), dt)
+    frame.current = requestAnimationFrame(tick(now))
+  }
+  const place = (e: ReactPointerEvent) => {
+    const d = drag.current
+    if (!d || e.pointerId !== d.id) return
+    let dx = e.clientX - d.cx
+    let dy = e.clientY - d.cy
+    const len = Math.hypot(dx, dy)
+    if (len > PAD_R) {
+      dx = (dx / len) * PAD_R
+      dy = (dy / len) * PAD_R
+    }
+    d.x = dx / PAD_R
+    d.y = dy / PAD_R
+    if (knobRef.current) knobRef.current.style.transform = `translate(${dx}px, ${dy}px)`
+  }
+  const release = (e: ReactPointerEvent) => {
+    if (drag.current?.id !== e.pointerId) return
+    drag.current = null
+    cancelAnimationFrame(frame.current)
+    if (knobRef.current) knobRef.current.style.transform = ""
+  }
+
+  return (
+    <div
+      role="application"
+      aria-label={label}
+      className="ts-px-btn pointer-events-auto relative hidden h-24 w-24 touch-none select-none rounded-full pointer-coarse:inline-flex"
+      onPointerDown={(e) => {
+        if (drag.current) return
+        e.preventDefault()
+        e.currentTarget.setPointerCapture(e.pointerId)
+        const r = e.currentTarget.getBoundingClientRect()
+        drag.current = { id: e.pointerId, cx: r.left + r.width / 2, cy: r.top + r.height / 2, x: 0, y: 0 }
+        place(e)
+        cancelAnimationFrame(frame.current)
+        frame.current = requestAnimationFrame(tick(performance.now()))
+      }}
+      onPointerMove={place}
+      onPointerUp={release}
+      onPointerCancel={release}
+      onLostPointerCapture={release}
+    >
+      {/* Marcas de las cuatro direcciones */}
+      <PixelIcon name="up" className="absolute left-1/2 top-1.5 h-2 w-2 -translate-x-1/2 opacity-40" />
+      <PixelIcon name="down" className="absolute bottom-1.5 left-1/2 h-2 w-2 -translate-x-1/2 opacity-40" />
+      <PixelIcon name="left" className="absolute left-1.5 top-1/2 h-2 w-2 -translate-y-1/2 opacity-40" />
+      <PixelIcon name="right" className="absolute right-1.5 top-1/2 h-2 w-2 -translate-y-1/2 opacity-40" />
+      <span
+        ref={knobRef}
+        className="absolute left-1/2 top-1/2 -ml-5 -mt-5 h-10 w-10 rounded-full bg-white/80 shadow-[0_0_0_1px_rgba(0,0,0,0.8)] transition-transform duration-75 ease-out"
+      />
+    </div>
   )
 }

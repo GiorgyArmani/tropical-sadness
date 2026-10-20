@@ -122,6 +122,13 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* La página es una pantalla fija: sin "jalar para recargar" ni rebote al deslizar en el celular,
+     y sin zoom por doble toque */
+  html,
+  body {
+    overscroll-behavior: none;
+    touch-action: manipulation;
+  }
 }
 
 /* ── Tropical Sadness · WIP landing ───────────────────────── */
