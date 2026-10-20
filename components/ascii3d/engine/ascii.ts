@@ -201,15 +201,18 @@ export class AsciiFilm {
               ch = dirChar(-ly, lx)
             }
           }
-          // Casi monocromo: el color se insinúa, la luz manda
-          const gray = l * 255
-          let k = ((0.3 + 0.95 * v) * colorK) / Math.max(l, 0.1)
+          // Casi monocromo: el color se insinúa, la luz manda. El tono sale a brillo pleno dividiendo
+          // por el canal más fuerte (sin pasar por HSB) y después se oscurece según la luz de la celda:
+          // así un azul o un rojo puro no se pasan de 255 en un canal y no cambian de tono al recortarse
+          const m = Math.max(R, G, B, 1)
+          let k = (0.3 + 0.95 * v) * colorK
           if (edge) k *= 1.25
+          k = Math.min(k, 1) // más allá de 1 se recortaría el canal fuerte y el tono se correría
           // Mezcla el color de la escena con la paleta de la isla según la luz
           const g = gradeAt(v)
-          const cr = (gray + (R - gray) * sat) * k
-          const cg = (gray + (G - gray) * sat) * k
-          const cb = (gray + (B - gray) * sat) * k
+          const cr = (255 + ((R * 255) / m - 255) * sat) * k
+          const cg = (255 + ((G * 255) / m - 255) * sat) * k
+          const cb = (255 + ((B * 255) / m - 255) * sat) * k
           const gk = 0.55 + 0.75 * v
           color = rgb([cr + (g[0] * gk - cr) * gr, cg + (g[1] * gk - cg) * gr, cb + (g[2] * gk - cb) * gr])
           if (d === 254) {

@@ -102,10 +102,12 @@ const PAD_TURN = 300
 const HOLD_MAX = 2500
 
 // Que los sustos sean esporádicos: [mínimo, + al azar hasta], en ms (susto) o segundos (aparición)
-const SCARE_FIRST = [60000, 60000] // el primer susto, después de llegar al pasillo
-const SCARE_GAP = [180000, 120000] // entre un susto y el siguiente
-const APP_FIRST = [60, 60] // la primera aparición al fondo
-const APP_GAP = [120, 120] // entre una aparición y la siguiente
+const SCARE_FIRST = [50000, 50000] // el primer susto, después de llegar al pasillo
+const SCARE_GAP = [150000, 100000] // entre un susto y el siguiente
+const SCARE_ODDS = 1 / 130 // ya habilitado, la chance por segundo de que se corten las luces
+const SCARE_TURN = 0.5 // ya habilitado, la chance de que esté atrás al darse la vuelta
+const APP_FIRST = [50, 50] // la primera aparición al fondo
+const APP_GAP = [100, 100] // entre una aparición y la siguiente
 const APP_SECS = 4.5 // cuánto se queda // si el shader nuevo no termina en este tiempo, se espera de una
 
 export default function Ascii3D({
@@ -462,7 +464,7 @@ export default function Ascii3D({
         if (!scare && phase.kind === "none" && !door && now > scareReady && t - appAt > 20) {
           // Se terminó de dar la vuelta: a veces estaba ahí atrás. Si no, muy de vez en cuando, se cortan las luces
           const turned = Math.abs(cy) > 0.85 && Math.sign(cy) !== facingSign
-          if ((turned && Math.random() < 0.4) || Math.random() < 1 / (FPS * 200)) {
+          if ((turned && Math.random() < SCARE_TURN) || Math.random() < SCARE_ODDS / FPS) {
             scare = { at: now, dark: turned ? 0 : 700, pos: null, ang: 0, behind: turned, side: Math.random() < 0.5 ? -1 : 1 }
             scareReady = now + SCARE_GAP[0] + Math.random() * SCARE_GAP[1]
           }

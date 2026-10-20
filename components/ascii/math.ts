@@ -38,7 +38,11 @@ export const mixRGB = (a: RGB, b: RGB, f: number): RGB => [
 
 // Colores cuantizados para que el render pueda agrupar tramos del mismo color
 const rgbCache = new Map<number, string>()
+// Si al aclarar un color un canal se pasa de 255, se divide por el canal más fuerte en vez de recortar
+// cada uno: el color llega a brillo pleno sin cambiar de tono (recortado, un azul fuerte viraba a celeste)
 export const rgb = (c: RGB, k = 1) => {
+  const m = Math.max(c[0], c[1], c[2]) * k
+  if (m > 255) k *= 255 / m
   const q = (v: number) => clamp(Math.round((v * k) / 12) * 12, 0, 255)
   const r = q(c[0])
   const g = q(c[1])

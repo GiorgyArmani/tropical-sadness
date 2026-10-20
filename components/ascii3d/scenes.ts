@@ -101,10 +101,11 @@ float doorIdx(float z) { return mod(floor((-z + 3.0) / 6.0), 100.0); }
 float doorKind(float n) {
   if (n < 0.5) return 0.0;
   float k = n + uLevel * 5.0;
-  float i = mod(k + 0.5, 12.0) - 0.5; // el +0.5 evita que 24/12 dé 1.9999
-  if (abs(i - 2.0) < 0.5 || abs(i - 5.0) < 0.5 || abs(i - 9.0) < 0.5) return 4.0;
-  if (abs(i - 11.0) < 0.5) {
-    float e = mod(floor((k + 0.5) / 12.0) + uLevel, 3.0);
+  float i = mod(k + 0.5, 8.0) - 0.5; // el +0.5 evita que 16/8 dé 1.9999
+  if (abs(i - 2.0) < 0.5 || abs(i - 5.0) < 0.5) return 4.0;
+  float s = abs(i - 4.0) < 0.5 ? 0.0 : (abs(i - 7.0) < 0.5 ? 1.0 : -1.0);
+  if (s > -0.5) {
+    float e = mod(floor((k + 0.5) / 8.0) * 2.0 + s + uLevel, 3.0);
     return e < 0.5 ? 1.0 : (e < 1.5 ? 2.0 : 3.0);
   }
   return 0.0;
