@@ -108,6 +108,7 @@ const SCARE_ODDS = 1 / 130 // ya habilitado, la chance por segundo de que se cor
 const SCARE_TURN = 0.5 // ya habilitado, la chance de que esté atrás al darse la vuelta
 const APP_FIRST = [50, 50] // la primera aparición al fondo
 const APP_GAP = [100, 100] // entre una aparición y la siguiente
+const APP_DARK = 0.85 // cuánta luz pierde el pasillo durante la aparición (el corte de luz pierde 0.65)
 const APP_SECS = 4.5 // cuánto se queda // si el shader nuevo no termina en este tiempo, se espera de una
 
 export default function Ascii3D({
@@ -472,7 +473,7 @@ export default function Ascii3D({
         if (Math.abs(cy) > 0.85) facingSign = Math.sign(cy)
         if (scare) {
           const hit = now - scare.at - scare.dark
-          if (hit < 0) dim = 1
+          if (hit < 0) dim = 0.65
           else {
             if (!scare.pos) {
               // Parado en el piso, a un paso, mirando a la cámara
@@ -533,6 +534,8 @@ export default function Ascii3D({
       }
       const appT = cam.doors ? t - appAt : -1 // segundos desde que apareció
       const appOn = appT >= 0 && appT <= APP_SECS
+      // Mientras está, el pasillo se oscurece fuerte para que resalte (entra y sale en una rampa corta)
+      if (appOn) dim = Math.max(dim, APP_DARK * clamp(appT / 0.4, 0, 1) * clamp((APP_SECS - appT) / 0.6, 0, 1))
 
       // Los botones de las puertas van sobre la puerta misma: se proyecta su centro a la pantalla, igual
       // que el shader. Devuelve si quedó a la vista.

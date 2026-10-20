@@ -183,7 +183,7 @@ export const createSfx = () => {
 
   // Una puerta vieja: el pestillo, las bisagras que chirrían y, al cerrarse, el golpe
   const door = (closing = false) => {
-    const s = begin(closing ? 0.39 : 0.83) // pico ~0.7
+    const s = begin(closing ? 0.2 : 0.42) // pico ~0.35, la mitad que antes (sonaba muy fuerte)
     if (!s) return
     duck(1700, 0.55)
     try {

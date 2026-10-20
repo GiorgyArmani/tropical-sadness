@@ -18,7 +18,7 @@ export type LightCtx = {
   level: number // nivel del pasillo
   door: { n: number; side: number; kind: number; open: number } | null // la puerta que se abre o se cierra
   scare: V3 | null // dónde está el demonio, si está
-  dim: number // 1 = se cortaron las luces
+  dim: number // cuánta luz se pierde (0.65 = se cortaron las luces, más durante la aparición)
 }
 
 export type Scene3D = {
@@ -283,7 +283,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) {
     // El tubo brilla con el color de su luz (titila con ella); los lejanos, que no tienen luz propia, parejo
     vec4 lp = lightAt(p, 0.8);
     if (lp.w > 0.5) return lp.rgb * 1.3;
-    return uScare.w > 0.5 ? vec3(1.2, 0.08, 0.05) : levelLight() * 1.3 * (1.0 - uDim * 0.65);
+    return uScare.w > 0.5 ? vec3(1.2, 0.08, 0.05) : levelLight() * 1.3 * (1.0 - uDim);
   }
   if (m < 6.5) return vec3(0.9, 0.75, 0.35) * light + 0.15;
   // Cartelito sobre la puerta: apagado si está cerrada, del color de su destino si abre
@@ -683,7 +683,7 @@ const tubeLamp = (k: number, t: number) => {
 const hallwayLights = ({ t, cam, level, door, scare, dim }: LightCtx): LightSet => {
   const tint = scare ? SCARE_RED : LEVEL_LIGHT[Math.min(level, LEVEL_LIGHT.length - 1)]
   // Con el corte de luz queda algo de penumbra: la habitación se tiene que seguir leyendo
-  const on = scare ? 1 : 1 - dim * 0.65
+  const on = scare ? 1 : 1 - dim
   const center = cam.pos[2] + cam.fw[2] * 6
   const k0 = Math.round(center / TUBE_GAP)
   const half = (TUBES - 1) / 2
