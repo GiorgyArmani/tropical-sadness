@@ -157,6 +157,9 @@ export default function Ascii3D({
   }, [active])
 
   const walkRef = useRef(0) // metros recorridos en las escenas para caminar
+  // Plano redondo (walk.roam): metros que faltan caminar. La rueda, la cruceta y el joystick los suman y
+  // cada cuadro se gasta una parte hacia donde se mira en ese momento: al girar no se pierde velocidad
+  const roamRef = useRef(0)
   // Las puertas con luz frenan: al llegar a una, se queda parado frente a ella. Para seguir hay que
   // empujar un poco más (PASS_M), o volver por donde se vino. held/passed son números de puerta sin dar
   // la vuelta; dir es el sentido en que se venía caminando (1 hacia -z, -1 hacia +z).
@@ -172,6 +175,11 @@ export default function Ascii3D({
     // camina de verdad hacia atrás (mirando para allá), no en reversa.
     if (sceneRef.current.camera.walk) {
       if (lockRef.current) return
+      // En un plano redondo se camina hacia donde se mira, a cualquier lado
+      if (sceneRef.current.camera.walk.roam) {
+        roamRef.current = clamp(roamRef.current + d * 6, -5, 5) // tope: al soltar no sigue de largo
+        return
+      }
       const f = Math.cos(camRef.current?.want.yaw ?? 0)
       const m = d * 6 * (f < 0 ? -1 : 1) * Math.max(Math.abs(f), 0.3)
       const st = stopRef.current
@@ -251,6 +259,9 @@ export default function Ascii3D({
     let cost = 0
     let costAt = performance.now()
     let walk = 0
+    let roamPos = { x: 0, z: 0 } // dónde se está en un plano redondo
+    const firstCam = sceneRef.current.camera // si se entra directo a un plano redondo (?escena=)
+    if (firstCam.walk?.roam) roamPos = { x: firstCam.target[0], z: firstCam.target[2] - (firstCam.walk.start ?? 0) }
     // Transición: "out" se mete en la escena actual, "in" aparece la nueva desde plano
     let phase: { kind: "in" | "out" | "none"; at: number } = { kind: "in", at: performance.now() }
     camera.want.zoom = ENTRY_ZOOM
@@ -286,6 +297,10 @@ export default function Ascii3D({
       exited = false
       door = null
       if (sc.camera.walk?.start) walk = walkRef.current = sc.camera.walk.start
+      if (sc.camera.walk?.roam) {
+        roamRef.current = 0
+        roamPos = { x: sc.camera.target[0], z: sc.camera.target[2] - (sc.camera.walk.start ?? 0) }
+      }
       stopRef.current = { held: null, passed: null, push: 0, prev: walk, dir: 1 }
       scare = null
       facingSign = 1
@@ -433,6 +448,39 @@ export default function Ascii3D({
         }
         // Solo se deja de caminar mientras una puerta del pasillo se abre o se cierra
         lockRef.current = !!cam.doors && !!door
+        const roam = cam.walk.roam
+        if (roam) {
+          // Plano redondo: cada cuadro se gasta una parte de lo que falta caminar (más el avance solo,
+          // despacito), siempre hacia donde se mira ahora. El borde del círculo no deja pasar
+          let stepM = roamRef.current * 0.12
+          roamRef.current -= stepM
+          if (Math.abs(roamRef.current) < 0.001) roamRef.current = 0
+          if (!reduced) stepM += cam.walk.drift / FPS
+          let nx = roamPos.x - Math.sin(yaw) * stepM
+          let nz = roamPos.z - Math.cos(yaw) * stepM
+          const ox = nx - roam.center[0]
+          const oz = nz - roam.center[1]
+          const out = Math.hypot(ox, oz)
+          if (out > roam.radius) {
+            nx = roam.center[0] + (ox / out) * roam.radius
+            nz = roam.center[1] + (oz / out) * roam.radius
+          }
+          walk += Math.hypot(nx - roamPos.x, nz - roamPos.z) // para el balanceo del paso
+          roamPos = { x: nx, z: nz }
+          const bob = reduced ? 0 : Math.sin(walk * 2.2) * 0.025
+          // Al salir se empuja un poco hacia donde se mira
+          const px = roamPos.x - Math.sin(face) * rush * 3
+          const pz = roamPos.z - Math.cos(face) * rush * 3
+          camera.firstPerson([px + Math.sin(walk * 1.1) * 0.04, cam.target[1] + bob, pz], face, pitch, cam.walk.fov)
+          if (roam.exitAt) {
+            const left = Math.hypot(roamPos.x - roam.exitAt[0], roamPos.z - roam.exitAt[1]) - (roam.exitR ?? 2)
+            if (cam.walk.flash) staticAmt = Math.max(staticAmt, clamp(1 - left / cam.walk.flash, 0, 1))
+            if (left < 0 && !exited) {
+              exited = true
+              calls.current.onLeave?.()
+            }
+          }
+        } else {
         // Primera persona: se avanza solo, despacito, y la rueda empuja; cerca de una puerta con luz se frena
         // Frente a una puerta con luz se queda quieto, esperando
         // (hacia donde se mira: si se mira la pared no se avanza, si se mira atrás se va para atrás)
@@ -459,6 +507,7 @@ export default function Ascii3D({
         if (cam.walk.flash) {
           const f = cam.walk.flash
           staticAmt = Math.max(staticAmt, clamp((along - (L - f)) / f, 0, 1), clamp(1 - along / f, 0, 1))
+        }
         }
       } else camera.orbit(cam.target, a, pitch, dist, tan)
       let ro = camera.pos // el susto la sacude y la empuja
