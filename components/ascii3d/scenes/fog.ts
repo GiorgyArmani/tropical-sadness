@@ -399,7 +399,7 @@ export const FOG: Scene3D = {
     pitch: -0.08,
     frame: 1.4,
     clip: 1e4,
-    pitchRange: [-0.35, 0.45],
+    pitchRange: [-1.2, 1.2],
     walk: {
       drift: 0.35,
       loop: 75,

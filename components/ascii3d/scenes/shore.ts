@@ -238,7 +238,7 @@ export const SHORE: Scene3D = {
     pitch: 0.18,
     frame: 1.4,
     clip: 1e4,
-    pitchRange: [-0.3, 0.6],
+    pitchRange: [-1.2, 1.2],
     walk: { drift: 0.3, loop: 22, fov: 72, flash: 3, exit: true, start: 3 },
     exitDoor: { at: [0, 1.0, 6.5], facing: [0, 0, -1] },
   },

@@ -173,7 +173,7 @@ export const STAIRS: Scene3D = {
     pitch: -0.05,
     frame: 5.5,
     clip: 1e4,
-    pitchRange: [-0.6, 0.45],
+    pitchRange: [-1.2, 1.2],
     walk: {
       drift: 0.2,
       loop: 1,

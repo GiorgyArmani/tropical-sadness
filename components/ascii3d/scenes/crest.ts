@@ -314,7 +314,7 @@ export const CREST_SCENE: Scene3D = {
     pitch: 0.08,
     frame: 1.4,
     clip: 1e4,
-    pitchRange: [-0.8, 0.5],
+    pitchRange: [-1.2, 1.2],
     walk: { drift: 0.25, loop: CREST.len - 2, fov: 74, flash: 3, exit: true, start: 3, rail: crestRail, speed: 1 },
     exitDoor: { at: [crestX(CREST_DOOR_Z), crestH(CREST_DOOR_Z) + 1.2, CREST_DOOR_Z], facing: [0, 0, 1] },
   },

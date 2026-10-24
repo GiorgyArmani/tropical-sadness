@@ -25,8 +25,8 @@ import type { Scene3D } from "./scenes"
 
 const FPS = 30 // cuadros por segundo base (las cuentas por cuadro están pensadas a este ritmo)
 const FPS_HI = 60 // en la compu, si la escena va holgada, se dibuja al doble para que el movimiento sea más fluido
-// Cuánto avanza al caminar cada empujón (metros por unidad de rueda): antes 6, se sentía como correr
-const STEP_M = 3.2
+// Cuánto avanza al caminar cada empujón (metros por unidad de rueda): 6 se sentía como correr, 3.2 muy lento
+const STEP_M = 4.5
 const ZOOM_MAX = 1.8 // de 1 a 1.8 la cámara ya no abre el lente: avanza hacia adentro
 // Con el zoom al mínimo el lente es casi ortográfico (5°); al máximo, gran angular
 const LENS = { fovFlat: 5, fovWide: 80, zoomMax: ZOOM_MAX }
@@ -180,7 +180,7 @@ export default function Ascii3D({
       if (lockRef.current) return
       // En un plano redondo se camina hacia donde se mira, a cualquier lado
       if (sceneRef.current.camera.walk.roam) {
-        roamRef.current = clamp(roamRef.current + d * STEP_M * (sceneRef.current.camera.walk.speed ?? 1), -3, 3) // tope: al soltar no sigue de largo
+        roamRef.current = clamp(roamRef.current + d * STEP_M * (sceneRef.current.camera.walk.speed ?? 1), -4.2, 4.2) // tope: al soltar no sigue de largo
         return
       }
       const f = Math.cos(camRef.current?.want.yaw ?? 0)
@@ -815,12 +815,8 @@ export default function Ascii3D({
         pinch = d
         return
       }
-      // En el celular, en las escenas para caminar, deslizar el dedo es como hacer scroll:
-      // hacia arriba se avanza, hacia abajo se retrocede, y de costado se mira
-      if (e.pointerType === "touch" && sceneRef.current.camera.walk) {
-        zoomBy(-(e.clientY - p.y) * 0.005)
-        look(e.clientX - p.x, 0)
-      } else look(e.clientX - p.x, e.clientY - p.y)
+      // Deslizar mira para todos lados (también al cielo y al piso); en el celular se camina con el joystick
+      look(e.clientX - p.x, e.clientY - p.y)
       p.x = e.clientX
       p.y = e.clientY
     }
