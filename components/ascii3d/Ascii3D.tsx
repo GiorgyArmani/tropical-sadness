@@ -19,11 +19,14 @@ import { AsciiFilm } from "./engine/ascii"
 import { Camera, dolly, sub, GLSL_CAMERA, type V3 } from "./engine/camera"
 import { GLSL_LIGHTING, LightRig } from "./engine/lighting"
 import { createShaderCache, fullscreenTriangle, GLSL_HEADER, GLSL_LIB, GLSL_RAYMARCH } from "./engine/shader"
-import { DOOR_GAP, DOORS, kindAt, sideOf, type Entry } from "./maze"
+import { DOOR_GAP, DOORS, kindAt, SCENE_OF, sideOf, type Entry } from "./maze"
 import { createSfx } from "./sfx"
 import type { Scene3D } from "./scenes"
 
-const FPS = 30
+const FPS = 30 // cuadros por segundo base (las cuentas por cuadro están pensadas a este ritmo)
+const FPS_HI = 60 // en la compu, si la escena va holgada, se dibuja al doble para que el movimiento sea más fluido
+// Cuánto avanza al caminar cada empujón (metros por unidad de rueda): antes 6, se sentía como correr
+const STEP_M = 3.2
 const ZOOM_MAX = 1.8 // de 1 a 1.8 la cámara ya no abre el lente: avanza hacia adentro
 // Con el zoom al mínimo el lente es casi ortográfico (5°); al máximo, gran angular
 const LENS = { fovFlat: 5, fovWide: 80, zoomMax: ZOOM_MAX }
@@ -92,11 +95,11 @@ const SCARE_SHOVE = 2 // metros que después te avienta para atrás (desde donde
 
 // Cruceta (compu): cuánto se mueve y gira cada 40 ms con la flecha apretada
 // (0.05 de avance son 30 cm caminando: unos 7 m/s; 12 px de giro, unos 1.5 rad/s)
-const DPAD_MOVE = 0.05
+const DPAD_MOVE = 0.03
 const DPAD_TURN = 12
 // Joystick (celular): a fondo, cuánto avanza y gira por segundo (lo mismo que la cruceta)
 // (1.25 de avance por segundo son unos 7 m/s caminando; 300 px de giro, unos 1.5 rad/s)
-const PAD_MOVE = 1.25
+const PAD_MOVE = 0.75
 const PAD_TURN = 300
 
 const HOLD_MAX = 2500
@@ -177,11 +180,11 @@ export default function Ascii3D({
       if (lockRef.current) return
       // En un plano redondo se camina hacia donde se mira, a cualquier lado
       if (sceneRef.current.camera.walk.roam) {
-        roamRef.current = clamp(roamRef.current + d * 6, -5, 5) // tope: al soltar no sigue de largo
+        roamRef.current = clamp(roamRef.current + d * STEP_M * (sceneRef.current.camera.walk.speed ?? 1), -3, 3) // tope: al soltar no sigue de largo
         return
       }
       const f = Math.cos(camRef.current?.want.yaw ?? 0)
-      const m = d * 6 * (f < 0 ? -1 : 1) * Math.max(Math.abs(f), 0.3)
+      const m = d * STEP_M * (sceneRef.current.camera.walk.speed ?? 1) * (f < 0 ? -1 : 1) * Math.max(Math.abs(f), 0.3)
       const st = stopRef.current
       if (st.held !== null) {
         const onward = Math.sign(m) === st.dir
@@ -230,6 +233,20 @@ export default function Ascii3D({
     camera.reset(sceneRef.current.camera.yaw, sceneRef.current.camera.pitch)
     camRef.current = camera
     const rig = new LightRig()
+    // Qué escenas preparar ahora: no todas (compilar cada shader cuesta, y en el celular compilar las
+    // ocho juntas trababa la carga), solo el pasillo y, estando en él, las de las puertas con luz más
+    // cercanas (tres para cada lado). Al caminar se van preparando las que siguen
+    const wanted = () => {
+      const ids = new Set(["pasillo"])
+      if (sceneRef.current.camera.doors) {
+        const n0 = Math.round(walk / DOOR_GAP)
+        for (let k = -3; k <= 3; k++) {
+          const kind = kindAt(level, n0 + k)
+          if (kind > 0 && SCENE_OF[kind]) ids.add(SCENE_OF[kind])
+        }
+      }
+      return preloadRef.current.filter((s) => ids.has(s.id) && !shaders.has(s.id))
+    }
     // Precarga: con compilación en paralelo se piden todas juntas; sin ella, una por vez y con calma
     let preloadAt = performance.now() + 1500
     const warmNext = (now: number) => {
@@ -240,7 +257,7 @@ export default function Ascii3D({
         preloadAt = now + 150
         return
       }
-      const rest = preloadRef.current.filter((s) => !shaders.has(s.id))
+      const rest = wanted()
       if (!rest.length) return
       if (parallel) {
         rest.forEach(request)
@@ -255,13 +272,24 @@ export default function Ascii3D({
 
     let frame = 0
     let last = -Infinity
+    // El movimiento depende del tiempo, no de los cuadros: fs = cuántos cuadros de 30 por segundo pasaron
+    // desde el anterior (1 a 30 cuadros por segundo, 0.5 a 60). ease(k) es el suavizado "k por cuadro de
+    // 30" llevado a ese tiempo, así se mueve igual de rápido a 30 o a 60 y un cuadro tarde no da un salto
+    let fs = 1
+    const ease = (k: number) => 1 - Math.pow(1 - k, fs)
+    let fpsCap = FPS // sube a FPS_HI en la compu si sobra tiempo (ver el loop)
     // Calidad automática (la película agranda o achica la letra): se revisa cada 2 segundos
     let cost = 0
     let costAt = performance.now()
     let walk = 0
     let roamPos = { x: 0, z: 0 } // dónde se está en un plano redondo
+    let roamY = 0 // la altura del piso ahí (walk.roam.floor), suavizada para la cámara
+    const placeRoam = (c: Scene3D["camera"]) => {
+      roamPos = { x: c.target[0], z: c.target[2] - (c.walk?.start ?? 0) }
+      roamY = c.walk?.roam?.floor?.(roamPos.x, roamPos.z) ?? 0
+    }
     const firstCam = sceneRef.current.camera // si se entra directo a un plano redondo (?escena=)
-    if (firstCam.walk?.roam) roamPos = { x: firstCam.target[0], z: firstCam.target[2] - (firstCam.walk.start ?? 0) }
+    if (firstCam.walk?.roam) placeRoam(firstCam)
     // Transición: "out" se mete en la escena actual, "in" aparece la nueva desde plano
     let phase: { kind: "in" | "out" | "none"; at: number } = { kind: "in", at: performance.now() }
     camera.want.zoom = ENTRY_ZOOM
@@ -299,7 +327,7 @@ export default function Ascii3D({
       if (sc.camera.walk?.start) walk = walkRef.current = sc.camera.walk.start
       if (sc.camera.walk?.roam) {
         roamRef.current = 0
-        roamPos = { x: sc.camera.target[0], z: sc.camera.target[2] - (sc.camera.walk.start ?? 0) }
+        placeRoam(sc.camera)
       }
       stopRef.current = { held: null, passed: null, push: 0, prev: walk, dir: 1 }
       scare = null
@@ -375,7 +403,7 @@ export default function Ascii3D({
       if (!program) return
 
       // Cámara suavizada hacia lo que pide el visitante
-      camera.smooth()
+      camera.smooth(ease(0.1), ease(0.12))
       const { yaw, pitch } = camera
       const drift = reduced || cam.walk ? 0 : Math.sin(t * 0.07) * 0.06
       const { tan, dist } = dolly(camera.zoom + rush, cam.frame, LENS)
@@ -428,7 +456,7 @@ export default function Ascii3D({
               open = ease(clamp(p * 1.4, 0, 1))
               face = a + (toDoor - a) * ease(clamp(p * 2, 0, 1))
               ax = door.side * ease(clamp((p - 0.45) / 0.55, 0, 1)) * 1.5 + door.side * rush * 2
-              walkRef.current = walk = walk + (Math.round(walk / DOOR_GAP) * DOOR_GAP - walk) * 0.2
+              walkRef.current = walk = walk + (Math.round(walk / DOOR_GAP) * DOOR_GAP - walk) * ease(0.2)
               if (p >= 1 && !door.fired) {
                 door.fired = true
                 calls.current.onEnter?.(door.kind, { level, door: door.n })
@@ -452,10 +480,10 @@ export default function Ascii3D({
         if (roam) {
           // Plano redondo: cada cuadro se gasta una parte de lo que falta caminar (más el avance solo,
           // despacito), siempre hacia donde se mira ahora. El borde del círculo no deja pasar
-          let stepM = roamRef.current * 0.12
+          let stepM = roamRef.current * ease(0.12)
           roamRef.current -= stepM
           if (Math.abs(roamRef.current) < 0.001) roamRef.current = 0
-          if (!reduced) stepM += cam.walk.drift / FPS
+          if (!reduced) stepM += (cam.walk.drift / FPS) * fs
           let nx = roamPos.x - Math.sin(yaw) * stepM
           let nz = roamPos.z - Math.cos(yaw) * stepM
           const ox = nx - roam.center[0]
@@ -465,13 +493,32 @@ export default function Ascii3D({
             nx = roam.center[0] + (ox / out) * roam.radius
             nz = roam.center[1] + (oz / out) * roam.radius
           }
+          // Con piso (escaleras): solo se pasa donde hay dónde pararse y sin saltos de altura. Si de
+          // frente no se puede, se resbala por el borde (solo x o solo z)
+          const floor = roam.floor
+          if (floor) {
+            const here = floor(roamPos.x, roamPos.z) ?? roamY
+            const ok = (x: number, z: number) => {
+              const h = floor(x, z)
+              return h !== null && Math.abs(h - here) < 0.6
+            }
+            if (!ok(nx, nz)) {
+              if (ok(nx, roamPos.z)) nz = roamPos.z
+              else if (ok(roamPos.x, nz)) nx = roamPos.x
+              else {
+                nx = roamPos.x
+                nz = roamPos.z
+              }
+            }
+            roamY += ((floor(nx, nz) ?? here) - roamY) * ease(0.3)
+          }
           walk += Math.hypot(nx - roamPos.x, nz - roamPos.z) // para el balanceo del paso
           roamPos = { x: nx, z: nz }
           const bob = reduced ? 0 : Math.sin(walk * 2.2) * 0.025
           // Al salir se empuja un poco hacia donde se mira
           const px = roamPos.x - Math.sin(face) * rush * 3
           const pz = roamPos.z - Math.cos(face) * rush * 3
-          camera.firstPerson([px + Math.sin(walk * 1.1) * 0.04, cam.target[1] + bob, pz], face, pitch, cam.walk.fov)
+          camera.firstPerson([px + Math.sin(walk * 1.1) * 0.04, roamY + cam.target[1] + bob, pz], face, pitch, cam.walk.fov)
           if (roam.exitAt) {
             const left = Math.hypot(roamPos.x - roam.exitAt[0], roamPos.z - roam.exitAt[1]) - (roam.exitR ?? 2)
             if (cam.walk.flash) staticAmt = Math.max(staticAmt, clamp(1 - left / cam.walk.flash, 0, 1))
@@ -484,8 +531,8 @@ export default function Ascii3D({
         // Primera persona: se avanza solo, despacito, y la rueda empuja; cerca de una puerta con luz se frena
         // Frente a una puerta con luz se queda quieto, esperando
         // (hacia donde se mira: si se mira la pared no se avanza, si se mira atrás se va para atrás)
-        if (!reduced && !lockRef.current && stopRef.current.held === null) walkRef.current += (cam.walk.drift / FPS) * Math.cos(yaw)
-        walk += (walkRef.current - walk) * 0.08
+        if (!reduced && !lockRef.current && stopRef.current.held === null) walkRef.current += (cam.walk.drift / FPS) * fs * Math.cos(yaw)
+        walk += (walkRef.current - walk) * ease(0.08)
         // Al salir se empuja un poco hacia donde se mira (antes eran 27 m: en la escalera daba varias vueltas y parpadeaba)
         const push = walk + rush * 3 * Math.cos(face)
         let along = (((push % L) + L) % L)
@@ -502,7 +549,19 @@ export default function Ascii3D({
         // En la escalera se sube: la altura sigue a los escalones
         const climb = cam.walk.climb
         const lift = climb ? clamp(along / climb.run, 0, climb.steps) * climb.rise : 0
-        camera.firstPerson([cam.target[0] + Math.sin(walk * 1.1) * 0.04 + ax, cam.target[1] + lift + bob, cam.target[2] - along], face, pitch, cam.walk.fov)
+        const rail = cam.walk.rail
+        if (rail) {
+          // Sobre riel: el camino lo dice la escena; la vista gira sola con las curvas (yaw y pitch son
+          // lo que se mira además) y en las subidas se levanta un poco la vista
+          const p0 = rail(along)
+          const pa = rail(Math.max(along - 1, 0))
+          const pb = rail(along + 1)
+          const tx = pb[0] - pa[0]
+          const tz = pb[2] - pa[2]
+          const heading = Math.atan2(-tx, -tz)
+          const slope = Math.atan2(pb[1] - pa[1], Math.hypot(tx, tz))
+          camera.firstPerson([p0[0] + Math.sin(walk * 1.1) * 0.04, p0[1] + cam.target[1] + bob, p0[2]], heading + face, pitch - slope * 0.5, cam.walk.fov)
+        } else camera.firstPerson([cam.target[0] + Math.sin(walk * 1.1) * 0.04 + ax, cam.target[1] + lift + bob, cam.target[2] - along], face, pitch, cam.walk.fov)
         // Al cruzar el final (la puerta) todo se vuelve estática y se reaparece al principio
         if (cam.walk.flash) {
           const f = cam.walk.flash
@@ -520,7 +579,7 @@ export default function Ascii3D({
         if (!scare && phase.kind === "none" && !door && now > scareReady && t - appAt > 20) {
           // Se terminó de dar la vuelta: a veces estaba ahí atrás. Si no, muy de vez en cuando, se cortan las luces
           const turned = Math.abs(cy) > 0.85 && Math.sign(cy) !== facingSign
-          if ((turned && Math.random() < SCARE_TURN) || Math.random() < SCARE_ODDS / FPS) {
+          if ((turned && Math.random() < SCARE_TURN) || Math.random() < (SCARE_ODDS / FPS) * fs) {
             scare = { at: now, dark: turned ? 0 : 700, pos: null, ang: 0, behind: turned, side: Math.random() < 0.5 ? -1 : 1 }
             scareReady = now + SCARE_GAP[0] + Math.random() * SCARE_GAP[1]
           }
@@ -696,7 +755,7 @@ export default function Ascii3D({
       if (!activeRef.current) {
         // En pausa: no se dibuja nada; con compilación en paralelo se siguen preparando las escenas
         if (parallel && now >= preloadAt) {
-          preloadRef.current.forEach((s) => ready(s, false))
+          wanted().forEach((s) => ready(s, false))
           preloadAt = now + 500
         }
         return
@@ -712,7 +771,8 @@ export default function Ascii3D({
       }
       // Con margen: a 60 o 120 Hz los refrescos llegan cada 33,33 ms y a veces una milésima antes del
       // límite exacto; sin margen ese cuadro se salteaba y la animación caía a ~20 por segundo
-      if (now - last >= 1000 / FPS - 3) {
+      if (now - last >= 1000 / fpsCap - 3) {
+        fs = clamp((now - last) / (1000 / FPS), 0.25, 3)
         const t0 = performance.now()
         hitch = false
         draw(now)
@@ -722,7 +782,10 @@ export default function Ascii3D({
         // Durante una transición no se cambia el tamaño de letra (se vería un salto)
         if (phase.kind === "none" && cost && now - costAt > 2000) {
           costAt = now
-          film.adapt(cost)
+          // En la compu: si cada cuadro sale rápido se dibuja a 60 por segundo; si a 60 ya no alcanza, se
+          // vuelve a 30 antes de bajar la calidad. En el celular siempre 30 (cuida la batería y el calor)
+          if (fpsCap === FPS_HI && cost > 11) fpsCap = FPS
+          else if (!film.adapt(cost) && !phone && fpsCap === FPS && cost < 6) fpsCap = FPS_HI
         }
         last = now
       }

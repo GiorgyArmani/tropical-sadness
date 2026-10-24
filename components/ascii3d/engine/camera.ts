@@ -136,6 +136,7 @@ export class Camera {
     p.f2("uRes", cols * sub, rows * sub)
     p.f1("uAspect", film.cw / film.lh) // las celdas no son cuadradas
     p.f1("uCrease", film.creases ? 1 : 0)
+    p.i1("uLoops", 99)
     this.upload(p)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
     pass.render(cols, rows, sub)
