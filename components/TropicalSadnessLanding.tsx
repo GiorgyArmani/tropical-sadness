@@ -80,15 +80,23 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
   const samplerOpen = inStudio && openVisit === place.visit
   const setSamplerOpen = (open: boolean) => setOpenVisit(open ? place.visit : null)
   const openSampler = useCallback(() => setOpenVisit(place.visit), [place.visit])
-  // Al salir del estudio el sampler se para (lo armado queda guardado para cuando se vuelva)
-  const usedSampler = useRef(false)
+  // En el estudio suena un ambiente analógico leve (soplido de cinta y zumbido). Al salir, el sampler se
+  // para y se apaga el ambiente (lo armado queda guardado para cuando se vuelva)
+  const visitedStudio = useRef(false)
   useEffect(() => {
-    if (samplerOpen) usedSampler.current = true
-  }, [samplerOpen])
-  useEffect(() => {
-    if (inStudio || !usedSampler.current) return
-    void import("./sampler/engine").then((m) => m.sleepSampler())
+    if (inStudio) {
+      visitedStudio.current = true
+      let live = true
+      void import("./sampler/engine").then((m) => live && m.getSampler().ambience(true))
+      return () => void (live = false)
+    }
+    if (visitedStudio.current) void import("./sampler/engine").then((m) => m.sleepSampler())
   }, [inStudio])
+  // Mientras se usa el sampler, el ambiente baja casi a nada; al cerrar el panel vuelve
+  useEffect(() => {
+    if (!visitedStudio.current && !samplerOpen) return
+    void import("./sampler/engine").then((m) => m.getSampler().setAmbienceLevel(samplerOpen ? 0.06 : 1))
+  }, [samplerOpen])
 
   const switchMode = () => {
     const to: Mode = mode === "2d" ? "3d" : "2d"

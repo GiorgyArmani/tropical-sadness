@@ -225,7 +225,118 @@ export class Sampler {
   // Al salir de la sala: se para todo y el audio se suspende (no gasta batería ni molesta a la radio)
   sleep() {
     this.stop()
-    if (this.ac.state === "running") void this.ac.suspend()
+    this.ambience(false)
+    // Se pausa después de que el ambiente terminó de apagarse (si no, se corta de golpe)
+    setTimeout(() => {
+      if (!this.amb && !this.playing && this.ac.state === "running") void this.ac.suspend()
+    }, 1300)
+  }
+
+  // --- El ambiente del estudio: soplido de cinta, zumbido de corriente y algún chasquido ---
+  // Va directo a la salida (no pasa por el volumen del sampler, el vúmetro ni el MP3 exportado).
+  // Muy bajo: picos de ~0.04, para que se sienta más de lo que se oye
+  private amb: { out: GainNode; nodes: AudioScheduledSourceNode[]; off: () => void } | null = null
+
+  // Cuánto se oye el ambiente (1 normal). Con el panel abierto baja casi a nada, para que no ensucie lo que se toca
+  private ambLevel = 1
+  setAmbienceLevel(v: number) {
+    this.ambLevel = v
+    const a = this.amb
+    if (!a) return
+    const t = this.ac.currentTime
+    a.out.gain.cancelScheduledValues(t)
+    a.out.gain.setTargetAtTime(v, t, 0.25)
+  }
+
+  ambience(on: boolean) {
+    const ac = this.ac
+    if (!on) {
+      const a = this.amb
+      if (!a) return
+      this.amb = null
+      a.off()
+      const t = ac.currentTime
+      a.out.gain.cancelScheduledValues(t)
+      a.out.gain.setTargetAtTime(0, t, 0.2)
+      a.nodes.forEach((n) => n.stop(t + 1.2))
+      return
+    }
+    if (this.amb) return
+    // El navegador puede tener el audio en pausa hasta un gesto: el primer toque o tecla lo despierta
+    const wake = () => this.resume()
+    const events = ["pointerdown", "touchend", "keydown"] as const
+    events.forEach((ev) => window.addEventListener(ev, wake, { passive: true }))
+    this.resume()
+
+    const sr = ac.sampleRate
+    // 6 s de soplido rosado (más grave que el blanco, como una cinta) con chasquidos sueltos
+    const len = sr * 6
+    const buf = ac.createBuffer(1, len, sr)
+    const d = buf.getChannelData(0)
+    let b0 = 0, b1 = 0, b2 = 0
+    for (let i = 0; i < len; i++) {
+      const w = Math.random() * 2 - 1
+      b0 = 0.997 * b0 + w * 0.029591
+      b1 = 0.985 * b1 + w * 0.032534
+      b2 = 0.95 * b2 + w * 0.048056
+      d[i] = (b0 + b1 + b2 + w * 0.05) * 0.5
+    }
+    for (let k = 0; k < 9; k++) {
+      const at = Math.floor(Math.random() * (len - 200))
+      const amp = 0.25 + Math.random() * 0.5
+      for (let j = 0; j < 120; j++) d[at + j] += (Math.random() * 2 - 1) * amp * Math.exp(-j / 18)
+    }
+    // Fundido en las puntas para que el loop no haga clic
+    const edge = Math.floor(sr * 0.05)
+    for (let i = 0; i < edge; i++) {
+      const g = i / edge
+      d[len - 1 - i] = d[len - 1 - i] * g + d[i] * (1 - g)
+    }
+
+    const out = ac.createGain()
+    out.gain.setValueAtTime(0, ac.currentTime)
+    out.gain.linearRampToValueAtTime(this.ambLevel, ac.currentTime + 2)
+    out.connect(ac.destination)
+
+    const hiss = ac.createBufferSource()
+    hiss.buffer = buf
+    hiss.loop = true
+    const hp = ac.createBiquadFilter()
+    hp.type = "highpass"
+    hp.frequency.value = 180
+    const lp = ac.createBiquadFilter()
+    lp.type = "lowpass"
+    lp.frequency.value = 7000
+    const hg = ac.createGain()
+    hg.gain.value = 0.035
+    // La cinta respira: el soplido sube y baja apenas
+    const wow = ac.createOscillator()
+    wow.frequency.value = 0.13
+    const wg = ac.createGain()
+    wg.gain.value = 0.008
+    wow.connect(wg).connect(hg.gain)
+    hiss.connect(hp).connect(lp).connect(hg).connect(out)
+
+    // Zumbido de la corriente (60 Hz y sus armónicos), casi en el piso
+    const hum = ac.createGain()
+    hum.gain.value = 1
+    const nodes: AudioScheduledSourceNode[] = [hiss, wow]
+    ;[
+      [60, 0.006],
+      [120, 0.004],
+      [180, 0.0025],
+      [240, 0.001],
+    ].forEach(([f, v]) => {
+      const o = ac.createOscillator()
+      o.frequency.value = f
+      const g = ac.createGain()
+      g.gain.value = v
+      o.connect(g).connect(hum)
+      nodes.push(o)
+    })
+    hum.connect(out)
+    nodes.forEach((n) => n.start())
+    this.amb = { out, nodes, off: () => events.forEach((ev) => window.removeEventListener(ev, wake)) }
   }
 
   // --- Secuenciador ---
