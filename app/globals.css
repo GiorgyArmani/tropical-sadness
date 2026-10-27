@@ -306,3 +306,171 @@
 .ascii-scanlines {
   background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0) 0 2px, rgba(0, 0, 0, 0.18) 2px 3px);
 }
+
+/* --- El sampler (components/sampler): un MPC en pixel art. Bordes duros de 2px, sin redondeos ni
+   brillos difusos; las luces se prenden en escalones. El gris claro del chasis queda en los bordes --- */
+.ts-mpc {
+  --mpc-edge: #d9d6cf;
+  background: #0a0a0a;
+  color: #e9e6df;
+  box-shadow:
+    0 -2px 0 0 var(--mpc-edge),
+    0 2px 0 0 var(--mpc-edge),
+    -2px 0 0 0 var(--mpc-edge),
+    2px 0 0 0 var(--mpc-edge),
+    inset 2px 2px 0 0 #2a2a2a,
+    inset -2px -2px 0 0 #000,
+    6px 6px 0 0 rgba(0, 0, 0, 0.6);
+  image-rendering: pixelated;
+}
+/* Recuadro pixel para las secciones de adentro */
+.ts-mpc-box {
+  background: #050505;
+  box-shadow:
+    0 -1px 0 0 #3c3c3c,
+    0 1px 0 0 #3c3c3c,
+    -1px 0 0 0 #3c3c3c,
+    1px 0 0 0 #3c3c3c;
+}
+.ts-mpc-screen {
+  position: relative;
+  background: #04121c;
+  color: #9fe7ff;
+  box-shadow:
+    0 -2px 0 0 #1d4a66,
+    0 2px 0 0 #1d4a66,
+    -2px 0 0 0 #1d4a66,
+    2px 0 0 0 #1d4a66;
+  overflow: hidden;
+}
+.ts-mpc-screen::after {
+  /* Renglones de pantalla vieja */
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.28) 0 1px, transparent 1px 3px);
+}
+.ts-mpc-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #161616;
+  color: rgba(255, 255, 255, 0.88);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  line-height: 1;
+  white-space: nowrap;
+  --c: rgba(255, 255, 255, 0.55);
+  box-shadow:
+    0 -1px 0 0 var(--c),
+    0 1px 0 0 var(--c),
+    -1px 0 0 0 var(--c),
+    1px 0 0 0 var(--c),
+    inset 1px 1px 0 0 rgba(255, 255, 255, 0.16),
+    inset -1px -2px 0 0 rgba(0, 0, 0, 0.85);
+  transition: color 120ms steps(2), background-color 120ms steps(2);
+}
+.ts-mpc-btn::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+.ts-mpc-btn:hover {
+  color: #ffd600;
+}
+.ts-mpc-btn:active {
+  transform: translate(1px, 1px);
+}
+.ts-mpc-btn:focus-visible {
+  outline: 1px solid #ffd600;
+  outline-offset: 3px;
+}
+/* Los colores del MPC, en versión pixel: el texto y el borde toman el color */
+.ts-mpc-btn--orange { --c: #ff7a3d; color: #ff9a66; }
+.ts-mpc-btn--blue { --c: #4ea0ec; color: #8cc4f5; }
+.ts-mpc-btn--red { --c: #ff3b3b; color: #ff7070; }
+.ts-mpc-btn--green { --c: #3fd47a; color: #7dffa8; }
+.ts-mpc-btn--on {
+  background: var(--c);
+  color: #000;
+}
+.ts-mpc-btn.ts-mpc-btn--on:hover {
+  color: #000;
+}
+.ts-mpc-btn:not(.ts-mpc-btn--orange):not(.ts-mpc-btn--blue):not(.ts-mpc-btn--red):not(.ts-mpc-btn--green).ts-mpc-btn--on {
+  --c: #ffd600;
+}
+
+/* Pad: un bloque cuadrado. --hit (0..1, lo mueve el motor cuadro a cuadro) lo llena de verde en
+   escalones; --head marca el paso que suena en el modo pasos */
+.ts-mpc-pad {
+  position: relative;
+  aspect-ratio: 1;
+  min-height: 0;
+  background-color: #1a1a1a;
+  background-image:
+    linear-gradient(rgba(200, 255, 74, calc(var(--hit) * 0.85)), rgba(200, 255, 74, calc(var(--hit) * 0.85))),
+    radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-size: 100% 100%, 6px 6px;
+  --edge: #3a3a3a;
+  box-shadow:
+    0 -2px 0 0 var(--edge),
+    0 2px 0 0 var(--edge),
+    -2px 0 0 0 var(--edge),
+    2px 0 0 0 var(--edge),
+    inset 2px 2px 0 0 rgba(255, 255, 255, 0.08),
+    inset -2px -2px 0 0 rgba(0, 0, 0, 0.7);
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  outline: calc(var(--head) * 2px) solid #fff;
+  outline-offset: 3px;
+}
+.ts-mpc-pad:active {
+  transform: translate(1px, 1px);
+}
+.ts-mpc-pad:focus-visible {
+  outline: 2px solid #ffd600;
+}
+/* Con sonido cargado: el borde en verde */
+.ts-mpc-pad--full {
+  --edge: #6f9a2a;
+}
+.ts-mpc-pad--sel {
+  --edge: #fff;
+}
+/* Modo pasos: prendido en verde lleno; cada tiempo un poco más claro */
+.ts-mpc-pad--beat {
+  background-color: #262626;
+}
+.ts-mpc-pad--step {
+  background-color: #b6ef3a;
+  --edge: #e2ff8a;
+  color: #000;
+}
+.ts-mpc-pad--step span {
+  color: #0a0a0a !important;
+}
+
+/* Perilla pixel: un octógono con una marca cuadrada */
+.ts-mpc-knob {
+  background: #d9d6cf;
+  clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%);
+  cursor: ns-resize;
+}
+.ts-mpc-knob::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  background: #8f8c85;
+  clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%);
+}
+.ts-mpc-knob::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  background: #c7c4bd;
+  clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%);
+}

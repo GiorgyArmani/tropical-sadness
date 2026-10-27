@@ -79,6 +79,7 @@ type Props = {
   onNear?: (door: NearDoor | null) => void
   onEnter?: (kind: number, from: Entry) => void // se cruzó una puerta del pasillo
   onLeave?: () => void // se llegó al final de una escena que sale (la puerta de arriba de la escalera)
+  onAction?: () => void // se tocó el botón de la cosa que se usa en la escena (camera.action)
   // false = montado pero en pausa (mientras se ve el 2D): no dibuja, solo termina de preparar shaders
   active?: boolean
   ref?: Ref<Ascii3DHandle>
@@ -123,6 +124,7 @@ export default function Ascii3D({
   onNear,
   onEnter,
   onLeave,
+  onAction,
   active = true,
   ref,
 }: Props) {
@@ -130,7 +132,7 @@ export default function Ascii3D({
   const activeRef = useRef(active)
   const wakeRef = useRef(false) // volvió a verse: hay que medir la pantalla de nuevo
   const wantVisit = useRef({ visit, entry }) // el viaje pedido (se lee junto con la escena)
-  const calls = useRef({ onNear, onEnter, onLeave })
+  const calls = useRef({ onNear, onEnter, onLeave, onAction })
   const openReq = useRef(false) // se pidió abrir la puerta de al lado
   const lockRef = useRef(false) // mientras una puerta se abre o se cierra no se camina
   useImperativeHandle(ref, () => ({ open: () => void (openReq.current = true) }))
@@ -146,14 +148,15 @@ export default function Ascii3D({
   const failRef = useRef<HTMLParagraphElement>(null)
   const doorBtnRef = useRef<HTMLButtonElement>(null) // "abrir puerta", que el motor pone encima de la puerta
   const exitBtnRef = useRef<HTMLButtonElement>(null) // "volver al pasillo", sobre la puerta de cada escena
+  const actionBtnRef = useRef<HTMLButtonElement>(null) // "tocar el sampler", sobre lo que se usa (camera.action)
 
   useEffect(() => {
     wantRef.current = scene
     wantVisit.current = { visit, entry }
   }, [scene, visit, entry])
   useEffect(() => {
-    calls.current = { onNear, onEnter, onLeave }
-  }, [onNear, onEnter, onLeave])
+    calls.current = { onNear, onEnter, onLeave, onAction }
+  }, [onNear, onEnter, onLeave, onAction])
   useEffect(() => {
     if (active && !activeRef.current) wakeRef.current = true
     activeRef.current = active
@@ -312,6 +315,7 @@ export default function Ascii3D({
     let appNext = Infinity // cuándo puede salir la próxima
     let appKind = 0 // 0 demonio, 1 un par de ojos, 2 varios
     let exitShown = false
+    let actionShown = false
     let exited = false // ya se salió por el final (escalera)
     const report = (d: NearDoor | null) => {
       const key = d ? `${level}:${d.door}` : ""
@@ -686,6 +690,14 @@ export default function Ascii3D({
         if (len <= EXIT_NEAR && !(f && -(exD[0] * f[0] + exD[1] * f[1] + exD[2] * f[2]) / len < 0.25)) exAt = ex.at
       }
       exitShown = pin(exitBtnRef.current, exAt, exitShown)
+      // Lo que se usa en la escena: el botón aparece encima solo de cerca
+      const act = cam.action
+      let actAt: V3 | null = null
+      if (act && phase.kind === "none" && !exited) {
+        const d = sub(act.at, ro)
+        if (Math.hypot(d[0], d[1], d[2]) <= act.near) actAt = act.at
+      }
+      actionShown = pin(actionBtnRef.current, actAt, actionShown)
 
       program.use()
       program.f1("uTime", t)
@@ -844,6 +856,7 @@ export default function Ascii3D({
         // En el pasillo abre la puerta de al lado; en las demás escenas sale por su puerta
         const cam = sceneRef.current.camera
         if (cam.doors) openReq.current = true
+        else if (cam.action && k === "e" && actionShown) calls.current.onAction?.() // de cerca, se usa
         else if (cam.exitDoor && k === "e" && exitShown) calls.current.onLeave?.() // solo frente a la puerta
       }
     }
@@ -916,6 +929,15 @@ export default function Ascii3D({
       >
         volver al pasillo
         <PixelIcon name="right" className="h-2.5 w-2.5" />
+      </button>
+      <button
+        ref={actionBtnRef}
+        type="button"
+        onClick={() => calls.current.onAction?.()}
+        style={{ position: "absolute", left: 0, top: 0, visibility: "hidden" }}
+        className="ts-px-btn ts-px-btn--primary pointer-events-auto z-20 h-7 gap-1.5 px-2.5 font-mono text-[11px] uppercase tracking-[0.15em] will-change-transform"
+      >
+        {scene.camera.action?.label ?? "usar"}
       </button>
 
       <div className={`pointer-events-none absolute z-20 flex flex-col gap-2 ${controlsClassName}`}>

@@ -9,6 +9,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@breezystack/lamejs": "^1.2.7",
     "@pixiv/three-vrm": "^3.4.3",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.4.2",

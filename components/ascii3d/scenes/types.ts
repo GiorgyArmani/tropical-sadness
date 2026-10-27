@@ -69,6 +69,9 @@ export type Scene3D = {
     // La puerta de vuelta al pasillo (el botón se dibuja encima). facing: hacia dónde mira su frente;
     // desde atrás no se muestra (sin facing se ve de los dos lados)
     exitDoor?: { at: [number, number, number]; facing?: [number, number, number] }
+    // Algo que se usa en la escena (el sampler del estudio): al acercarse a menos de near metros
+    // aparece un botón con label encima de at; tocarlo (o la E) llama a onAction
+    action?: { at: [number, number, number]; near: number; label: string }
     yawRange?: [number, number]
     pitchRange: [number, number]
   }

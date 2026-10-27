@@ -19,7 +19,8 @@ const livePosition = (duration: number) => (Date.now() / 1000) % duration
 
 export const DUCK_EVENT = "ts-duck"
 
-export default function MusicBar({ ref }: { ref?: Ref<RadioHandle> }) {
+// silenced: en el estudio la radio se calla (y la barra se esconde); al salir vuelve al vivo si estaba sonando
+export default function MusicBar({ ref, silenced = false }: { ref?: Ref<RadioHandle>; silenced?: boolean }) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const syncPending = useRef(false)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -28,7 +29,14 @@ export default function MusicBar({ ref }: { ref?: Ref<RadioHandle> }) {
   const [muted, setMuted] = useState(false)
 
   // Conectar = saltar al punto en vivo y sonar. Se llama dentro del click para que el navegador deje reproducir.
+  const silencedRef = useRef(silenced)
+  const wasOn = useRef(false)
   const connect = () => {
+    // En el estudio no suena: queda anotado para cuando se salga
+    if (silencedRef.current) {
+      wasOn.current = true
+      return
+    }
     const audio = audioRef.current
     if (!audio || !audio.paused) return // ya está sonando: no saltar de nuevo al vivo
     if (Number.isFinite(audio.duration) && audio.duration > 0) audio.currentTime = livePosition(audio.duration)
@@ -38,6 +46,19 @@ export default function MusicBar({ ref }: { ref?: Ref<RadioHandle> }) {
   }
 
   useImperativeHandle(ref, () => ({ connect }))
+
+  useEffect(() => {
+    silencedRef.current = silenced
+    const audio = audioRef.current
+    if (!audio) return
+    if (silenced) {
+      wasOn.current = !audio.paused
+      audio.pause()
+    } else if (wasOn.current) {
+      wasOn.current = false
+      connect()
+    }
+  }, [silenced])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -118,6 +139,7 @@ export default function MusicBar({ ref }: { ref?: Ref<RadioHandle> }) {
     <div
       role="region"
       aria-label="Radio"
+      hidden={silenced}
       className="pointer-events-none fixed inset-x-0 bottom-0 z-40 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-8 sm:pb-5"
     >
       <audio ref={audioRef} src={NOW_PLAYING.file} preload="metadata" loop />

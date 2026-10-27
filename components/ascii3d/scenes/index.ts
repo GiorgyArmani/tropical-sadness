@@ -8,8 +8,9 @@ import { CEMETERY } from "./cemetery"
 import { FOG } from "./fog"
 import { SHORE } from "./shore"
 import { CREST_SCENE } from "./crest"
+import { STUDIO } from "./studio"
 
 export type { LightCtx, Scene3D } from "./types"
 
 // El orden importa: la primera es la de entrada si la dirección no pide otra
-export const SCENES_3D = [HALLWAY, STAIRS, ISLAND, CEMETERY, FOG, SHORE, CREST_SCENE]
+export const SCENES_3D = [HALLWAY, STAIRS, ISLAND, CEMETERY, FOG, SHORE, CREST_SCENE, STUDIO]

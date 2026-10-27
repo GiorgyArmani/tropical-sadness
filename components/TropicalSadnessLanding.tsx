@@ -1,5 +1,6 @@
 "use client"
 
+import dynamic from "next/dynamic"
 import { useSearchParams } from "next/navigation"
 import { useCallback, useEffect, useRef, useState } from "react"
 import MusicBar, { type RadioHandle } from "./MusicBar"
@@ -14,6 +15,9 @@ import ChatRoom, { ChatToggle } from "./ChatRoom"
 import RadioGate from "./RadioGate"
 import StaticBurst, { type StaticBurstHandle } from "./StaticBurst"
 import { saveNick, useSavedNick } from "./useSavedNick"
+
+// El sampler pesa (motor de audio y su interfaz): se baja recién al entrar al estudio
+const Sampler = dynamic(() => import("./sampler/Sampler"), { ssr: false })
 
 type Mode = "2d" | "3d"
 
@@ -67,6 +71,24 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
     [travel],
   )
   const backToHall = useCallback(() => travel("pasillo", origin), [travel, origin])
+
+  // El estudio: la radio se calla. El sampler se abre con el botón que aparece encima de él al acercarse
+  // (camera.action de la escena). Con el panel abierto el 3D queda en pausa (no se ve y ahorra batería)
+  const inStudio = mode === "3d" && place.id === "estudio"
+  // En qué visita al estudio está abierto el panel (al salir y volver a entrar arranca cerrado)
+  const [openVisit, setOpenVisit] = useState<number | null>(null)
+  const samplerOpen = inStudio && openVisit === place.visit
+  const setSamplerOpen = (open: boolean) => setOpenVisit(open ? place.visit : null)
+  const openSampler = useCallback(() => setOpenVisit(place.visit), [place.visit])
+  // Al salir del estudio el sampler se para (lo armado queda guardado para cuando se vuelva)
+  const usedSampler = useRef(false)
+  useEffect(() => {
+    if (samplerOpen) usedSampler.current = true
+  }, [samplerOpen])
+  useEffect(() => {
+    if (inStudio || !usedSampler.current) return
+    void import("./sampler/engine").then((m) => m.sleepSampler())
+  }, [inStudio])
 
   const switchMode = () => {
     const to: Mode = mode === "2d" ? "3d" : "2d"
@@ -124,12 +146,13 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
       {has3d && (
         <div className={mode === "3d" ? "absolute inset-0" : "hidden"}>
           <Ascii3D
-            active={mode === "3d"}
+            active={mode === "3d" && !samplerOpen}
             scene={scene3d}
             entry={place.entry}
             visit={place.visit}
             onEnter={onEnter}
             onLeave={backToHall}
+            onAction={openSampler}
             preload={SCENES_3D}
             controlsClassName="left-3 bottom-[3.9rem] items-start sm:inset-x-0 sm:bottom-20 sm:items-center"
           />
@@ -191,7 +214,9 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
       </section>
 
       {nick && <ChatRoom nick={nick} open={chatOpen} onOpenChange={setChatOpen} />}
-      <MusicBar ref={radioRef} />
+      <MusicBar ref={radioRef} silenced={inStudio} />
+
+      {inStudio && samplerOpen && <Sampler onMinimize={() => setSamplerOpen(false)} onLeave={backToHall} />}
 
       {saved === "" && (
         <RadioGate
