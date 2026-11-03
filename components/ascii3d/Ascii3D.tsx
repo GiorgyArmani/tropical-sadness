@@ -98,9 +98,9 @@ const SCARE_SHOVE = 2 // metros que después te avienta para atrás (desde donde
 // (0.05 de avance son 30 cm caminando: unos 7 m/s; 12 px de giro, unos 1.5 rad/s)
 const DPAD_MOVE = 0.03
 const DPAD_TURN = 12
-// Joystick (celular): a fondo, cuánto avanza y gira por segundo (lo mismo que la cruceta)
-// (1.25 de avance por segundo son unos 7 m/s caminando; 300 px de giro, unos 1.5 rad/s)
-const PAD_MOVE = 0.75
+// Joystick (celular): a fondo, cuánto avanza y gira por segundo
+// (el doble de avance que la cruceta, que en el celular se sentía muy lento; 300 px de giro, unos 1.5 rad/s)
+const PAD_MOVE = 1.5
 const PAD_TURN = 300
 
 const HOLD_MAX = 2500
