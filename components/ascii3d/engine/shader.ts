@@ -130,7 +130,7 @@ void main() {
 #ifdef AVATARS
       if (av) {
         n = an;
-        col = mix(avatarShade(p, n, rd, m), sk, fogK);
+        col = mix(avatarShade(p, n, rd, m), sk, fogK * 0.7); // la niebla los tapa menos que al resto
       } else
 #endif
       {
@@ -139,7 +139,8 @@ void main() {
         float ao = t * pxA < 0.25 ? calcAO(p, n) : 1.0;
         vec3 sc = shade(p, n, rd, m, ao);
 #ifdef AVATARS
-        sc *= avatarBlob(p); // la sombra de contacto debajo de cada avatar
+        vec4 ground = avatarGround(p); // la sombra de contacto y el aura en el piso
+        sc = sc * ground.w + ground.rgb;
 #endif
         col = mix(sc, sk, fogK);
       }

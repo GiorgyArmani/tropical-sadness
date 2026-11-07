@@ -11,14 +11,14 @@
 // El zoom es un "dolly zoom": alejado, el lente es casi plano y todo se ve 2D; al acercarse el
 // lente se abre, aparece la profundidad, y al final la cámara entra en el espacio.
 
-import { useEffect, useImperativeHandle, useRef, type PointerEvent as ReactPointerEvent, type Ref } from "react"
+import { useEffect, useImperativeHandle, useRef, useState, type PointerEvent as ReactPointerEvent, type Ref } from "react"
 import { clamp, hash, rgb } from "../ascii/math"
 import PixelIcon, { type PixelIconName } from "../PixelIcon"
 import { createLiveSky } from "./live"
 import { AsciiFilm } from "./engine/ascii"
 import { Camera, dolly, sub, type V3 } from "./engine/camera"
 import { LightRig } from "./engine/lighting"
-import { MAX_AVATARS, uploadAvatars, withAvatars, type Avatar, type Look } from "./engine/avatars"
+import { lookOf, MAX_AVATARS, STRIDE, uploadAvatars, withAvatars, type Avatar, type Look } from "./engine/avatars"
 import { createBots, stepBots } from "./bots"
 import { createRoomLink } from "./net"
 import { createShaderCache, fullscreenTriangle } from "./engine/shader"
@@ -39,7 +39,13 @@ const IN_MS = 1000 // al llegar: la estática se disuelve y el lente se abre des
 const ENTRY_ZOOM = 0.35
 // El servidor de salas en vivo (server/rooms). Sin él, los avatares son solo los bots de prueba
 const ROOMS_URL = process.env.NEXT_PUBLIC_ROOMS_URL
-const WALK_SPEED = 1.3 // metros por segundo que cuentan como caminar del todo (para el paso del avatar)
+const THIRD_BACK = 2.4 // tercera persona: a cuántos metros orbita la cámara
+const THIRD_AIM = 1.2 // y a qué altura del avatar mira (el pecho)
+const THIRD_TILT = 0.25 // cuánto más desde arriba mira que en primera persona
+const ROAM_SPEED = 1.8 // metros por segundo como mucho en los planos redondos (más rápido, el ASCII se rompe)
+const ROAM_QUEUE = 0.9 // metros que se pueden acumular empujando (al soltar se frena enseguida)
+const RUN_X = 2 // corriendo se va al doble
+const CROUCH_X = 0.5 // agachado, a la mitad
 
 
 type GL = WebGLRenderingContext
@@ -143,6 +149,24 @@ export default function Ascii3D({
   }, [onNear, onEnter, onLeave, onAction])
   const nickRef = useRef(nick)
   const avatarLookRef = useRef(look)
+  // Tercera persona (en los planos redondos con avatares): la cámara va detrás y se ve el avatar propio
+  const [third, setThird] = useState(false)
+  const thirdRef = useRef(third)
+  useEffect(() => {
+    thirdRef.current = third
+  }, [third])
+  // Correr (Shift, el joystick a fondo o el botón) y la pose: 0 de pie, 1 agachado, 2 sentado
+  const [runOn, setRunOn] = useState(false)
+  const [pose, setPose] = useState(0)
+  const runRef = useRef({ toggle: false, shift: false, joyAt: 0 })
+  const poseRef = useRef(0)
+  useEffect(() => {
+    runRef.current.toggle = runOn
+  }, [runOn])
+  useEffect(() => {
+    poseRef.current = pose
+  }, [pose])
+  const togglePose = (n: number) => setPose((v) => (v === n ? 0 : n))
   useEffect(() => {
     nickRef.current = nick
     avatarLookRef.current = look
@@ -173,7 +197,7 @@ export default function Ascii3D({
       if (lockRef.current) return
       // En un plano redondo se camina hacia donde se mira, a cualquier lado
       if (sceneRef.current.camera.walk.roam) {
-        roamRef.current = clamp(roamRef.current + d * STEP_M * (sceneRef.current.camera.walk.speed ?? 1), -4.2, 4.2) // tope: al soltar no sigue de largo
+        roamRef.current = clamp(roamRef.current + d * STEP_M * (sceneRef.current.camera.walk.speed ?? 1), -ROAM_QUEUE, ROAM_QUEUE) // tope: al soltar no sigue de largo
         return
       }
       const f = Math.cos(camRef.current?.want.yaw ?? 0)
@@ -291,6 +315,18 @@ export default function Ascii3D({
     let roamY = 0 // la altura del piso ahí (walk.roam.floor), suavizada para la cámara
     const placeRoam = (c: Scene3D["camera"]) => {
       roamPos = { x: c.target[0], z: c.target[2] - (c.walk?.start ?? 0) }
+      // Cada quien aparece un poco corrido, así no quedan todos uno adentro del otro
+      const floor = c.walk?.roam?.floor
+      const here = floor ? floor(roamPos.x, roamPos.z) : 0
+      for (let k = 0; k < 6; k++) {
+        const x = roamPos.x + (Math.random() * 2 - 1) * 1.8
+        const z = roamPos.z + (Math.random() * 2 - 1) * 0.8
+        const h = floor ? floor(x, z) : 0
+        if (h !== null && here !== null && Math.abs(h - here) < 0.3) {
+          roamPos = { x, z }
+          break
+        }
+      }
       roamY = c.walk?.roam?.floor?.(roamPos.x, roamPos.z) ?? 0
     }
     const firstCam = sceneRef.current.camera // si se entra directo a un plano redondo (?escena=)
@@ -303,6 +339,11 @@ export default function Ascii3D({
     const link = ROOMS_URL ? createRoomLink(ROOMS_URL) : null
     let myStep = 0
     let myWalk = 0
+    let thirdK = 0 // 0 primera persona, 1 tercera (suavizado)
+    let charYaw = 0 // hacia dónde mira el avatar propio (en tercera persona la cámara orbita sin girarlo)
+    let myPhase = 0 // el paso del avatar propio (radianes)
+    let crouchK = 0 // agachado y sentado, suavizados (0..1)
+    let sitK = 0
     // Transición: "out" se mete en la escena actual, "in" aparece la nueva desde plano
     let phase: { kind: "in" | "out" | "none"; at: number } = { kind: "in", at: performance.now() }
     camera.want.zoom = ENTRY_ZOOM
@@ -495,10 +536,23 @@ export default function Ascii3D({
         if (roam) {
           // Plano redondo: cada cuadro se gasta una parte de lo que falta caminar (más el avance solo,
           // despacito), siempre hacia donde se mira ahora. El borde del círculo no deja pasar
-          let stepM = roamRef.current * ease(0.12)
+          // A paso parejo, con un tope de velocidad
+          // Corriendo, el doble; agachado, la mitad. Sentado no se camina: moverse lo levanta
+          const rr = runRef.current
+          const running = rr.toggle || rr.shift || now - rr.joyAt < 200
+          if (poseRef.current === 2 && Math.abs(roamRef.current) > 0.01) {
+            poseRef.current = 0
+            setPose(0)
+          }
+          crouchK += ((poseRef.current === 1 ? 1 : 0) - crouchK) * ease(0.15)
+          sitK += ((poseRef.current === 2 ? 1 : 0) - sitK) * ease(0.1)
+          const gait = poseRef.current === 1 ? CROUCH_X : running ? RUN_X : 1
+          const maxStep = ((ROAM_SPEED * gait * (cam.walk.speed ?? 1)) / FPS) * fs
+          let stepM = clamp(roamRef.current * ease(0.12), -maxStep, maxStep)
           roamRef.current -= stepM
           if (Math.abs(roamRef.current) < 0.001) roamRef.current = 0
-          if (!reduced) stepM += (cam.walk.drift / FPS) * fs
+          // El avance solo, despacito, solo en primera persona (en tercera el avatar se queda quieto)
+          if (!reduced && !thirdRef.current) stepM += (cam.walk.drift / FPS) * fs
           let nx = roamPos.x - Math.sin(yaw) * stepM
           let nz = roamPos.z - Math.cos(yaw) * stepM
           const ox = nx - roam.center[0]
@@ -528,13 +582,47 @@ export default function Ascii3D({
             roamY += ((floor(nx, nz) ?? here) - roamY) * ease(0.3)
           }
           walk += Math.hypot(nx - roamPos.x, nz - roamPos.z) // para el balanceo del paso
+          // Corriendo, cada zancada cubre más: el paso no se acelera tanto como la velocidad
+          myPhase += (Math.hypot(nx - roamPos.x, nz - roamPos.z) * STRIDE) / (1 + 0.5 * Math.max(myWalk - 1, 0))
           myStep += Math.hypot(nx - roamPos.x, nz - roamPos.z)
           roamPos = { x: nx, z: nz }
           const bob = reduced ? 0 : Math.sin(walk * 2.2) * 0.025
           // Al salir se empuja un poco hacia donde se mira
           const px = roamPos.x - Math.sin(face) * rush * 3
           const pz = roamPos.z - Math.cos(face) * rush * 3
-          camera.firstPerson([px + Math.sin(walk * 1.1) * 0.04, roamY + cam.target[1] + bob, pz], face, pitch, cam.walk.fov)
+          // Tercera persona, como en un MMORPG: la cámara orbita alrededor del avatar (arrastrando se lo
+          // ve de costado o de frente) y el avatar gira hacia donde apunta la cámara solo al caminar. Si
+          // atrás no hay dónde pararse (una pared, un escalón alto) la cámara se acerca
+          thirdK += ((thirdRef.current ? 1 : 0) - thirdK) * ease(0.08)
+          if (thirdK < 0.01 || Math.abs(stepM) > 0.002) {
+            const turn = ((((face - charYaw + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI
+            charYaw += thirdK < 0.01 ? turn : turn * ease(0.15)
+          }
+          const steady = 1 - thirdK // de lejos no se nota el bamboleo del paso
+          const low = 0.3 * crouchK + 0.72 * sitK // cuánto bajó el cuerpo
+          const eye: V3 = [px + Math.sin(walk * 1.1) * 0.04 * steady, roamY + cam.target[1] + bob * steady - low, pz]
+          const tilt = pitch + THIRD_TILT * thirdK
+          if (thirdK > 0.001) {
+            let back = THIRD_BACK
+            if (roam.floor) {
+              for (let d = 0.3; d <= THIRD_BACK; d += 0.15) {
+                const h = roam.floor(px + Math.sin(face) * d, pz + Math.cos(face) * d)
+                if (h === null || Math.abs(h - roamY) > 0.6) {
+                  back = Math.max(0.6, d - 0.3)
+                  break
+                }
+              }
+            }
+            // Detrás del pecho del avatar, en la dirección opuesta a donde mira la cámara (sin bajar del piso)
+            const ch = Math.cos(tilt)
+            const orbit: V3 = [
+              px + Math.sin(face) * ch * back,
+              Math.max(roamY + 0.25, roamY + THIRD_AIM - low + Math.sin(tilt) * back),
+              pz + Math.cos(face) * ch * back,
+            ]
+            for (let k = 0; k < 3; k++) eye[k] += (orbit[k] - eye[k]) * thirdK
+          }
+          camera.firstPerson(eye, face, tilt, cam.walk.fov)
           if (roam.exitAt) {
             const left = Math.hypot(roamPos.x - roam.exitAt[0], roamPos.z - roam.exitAt[1]) - (roam.exitR ?? 2)
             if (cam.walk.flash) staticAmt = Math.max(staticAmt, clamp(1 - left / cam.walk.flash, 0, 1))
@@ -717,11 +805,16 @@ export default function Ascii3D({
       // Salas en vivo: solo en planos redondos con avatares, ya adentro (no mientras se sale)
       const inRoom = !!sc.avatars && !!cam.walk?.roam && phase.kind !== "out"
       link?.want(inRoom ? sc.id : null, nickRef.current, avatarLookRef.current)
-      myWalk += (clamp(myStep / dt / WALK_SPEED, 0, 1) - myWalk) * ease(0.3)
+      myWalk += (clamp(myStep / dt / ROAM_SPEED, 0, 2) - myWalk) * ease(0.3) // 1 caminando, 2 corriendo
       myStep = 0
-      if (inRoom) link?.send(now, { x: roamPos.x, y: roamY, z: roamPos.z, yaw, walk: myWalk })
+      if (inRoom) link?.send(now, { x: roamPos.x, y: roamY, z: roamPos.z, yaw: charYaw, walk: myWalk, pose: poseRef.current })
       const people = link?.avatars(dt) ?? []
-      const crowd: Avatar[] = people.length ? [...people, ...bots].slice(0, MAX_AVATARS) : bots
+      // En tercera persona, uno mismo también (ya lejos de la cámara, para no verse desde adentro)
+      const me: Avatar[] =
+        sc.avatars && cam.walk?.roam && phase.kind !== "out" && thirdK > 0.35
+          ? [{ pos: [roamPos.x, roamY, roamPos.z], yaw: charYaw, look: avatarLookRef.current ?? lookOf(nickRef.current || "anon"), walk: myWalk, phase: myPhase, seed: 0.5, crouch: crouchK, sit: sitK }]
+          : []
+      const crowd: Avatar[] = me.length || people.length ? [...me, ...people, ...bots].slice(0, MAX_AVATARS) : bots
       if (sc.avatars && crowd.length && phase.kind !== "out") {
         // Con compilación en paralelo se pregunta sin esperar; sin ella se espera una vez (la primera
         // vez que aparece alguien)
@@ -789,6 +882,22 @@ export default function Ascii3D({
           const x = hash(k, 3) * (W + H * slant) - y * slant
           for (let j = 0; j < 3; j++) ctx.fillText(j === 2 ? "'" : ch, x + slant * lh * j, y - lh * j)
         }
+      }
+      // El nick de cada persona sobre su cabeza (los bots no tienen), más tenue de lejos
+      if (sc.avatars && people.length && phase.kind !== "out" && staticAmt < 0.5) {
+        const ctx = film.ctx
+        ctx.textAlign = "center"
+        for (const o of people) {
+          if (!o.nick) continue
+          const far = Math.hypot(o.pos[0] - ro[0], o.pos[2] - ro[2])
+          if (far > 16) continue
+          const q = camera.project([o.pos[0], o.pos[1] + 2.05, o.pos[2]])
+          if (!q) continue
+          const sp = film.toScreen(q)
+          ctx.fillStyle = rgb([235, 225, 245], 0.9 * clamp((16 - far) / 6, 0, 1))
+          ctx.fillText(o.nick, sp.x, sp.y - film.lh)
+        }
+        ctx.textAlign = "start"
       }
       film.glow()
     }
@@ -872,11 +981,19 @@ export default function Ascii3D({
       e.preventDefault()
       zoomBy(-e.deltaY * 0.0012)
     }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Shift") runRef.current.shift = false
+    }
+    const onBlur = () => (runRef.current.shift = false)
     const onKey = (e: KeyboardEvent) => {
       if (!activeRef.current || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       const walking = !!sceneRef.current.camera.walk
+      const free = !!sceneRef.current.avatars && !!sceneRef.current.camera.walk?.roam
       const k = e.key.toLowerCase()
-      if (e.key === "+" || e.key === "=") zoomBy(0.12)
+      if (e.key === "Shift") runRef.current.shift = true
+      else if (free && k === "c") togglePose(1)
+      else if (free && k === "x") togglePose(2)
+      else if (e.key === "+" || e.key === "=") zoomBy(0.12)
       else if (e.key === "-") zoomBy(-0.12)
       else if (e.key === "ArrowLeft" || (walking && k === "a")) look(-40, 0)
       else if (e.key === "ArrowRight" || (walking && k === "d")) look(40, 0)
@@ -905,6 +1022,8 @@ export default function Ascii3D({
     layer.addEventListener("pointercancel", onUp)
     layer.addEventListener("wheel", onWheel, { passive: false })
     window.addEventListener("keydown", onKey)
+    window.addEventListener("keyup", onKeyUp)
+    window.addEventListener("blur", onBlur)
 
     resize()
     window.addEventListener("resize", resize)
@@ -916,6 +1035,8 @@ export default function Ascii3D({
       sfx.close()
       window.removeEventListener("resize", resize)
       window.removeEventListener("keydown", onKey)
+      window.removeEventListener("keyup", onKeyUp)
+      window.removeEventListener("blur", onBlur)
       window.removeEventListener("touchend", sfx.unlock, { capture: true })
       document.removeEventListener("gesturestart", noGesture)
       layer.removeEventListener("pointerdown", onDown)
@@ -989,20 +1110,62 @@ export default function Ascii3D({
           <Joystick
             label={scene.camera.walk ? "Joystick: arriba avanza, abajo retrocede, a los lados gira" : "Joystick: arriba acerca, abajo aleja, a los lados gira"}
             onMove={(x, y, dt) => {
+              if (y < -0.8) runRef.current.joyAt = performance.now() // a fondo hacia adelante, corre
               if (y) zoomBy(-y * PAD_MOVE * dt)
               if (x) lookRef.current(x * PAD_TURN * dt, 0)
             }}
           />
-          {scene.camera.walk && (
-            <button
-              type="button"
-              onClick={turnAround}
-              className="ts-px-btn pointer-events-auto h-8 px-2 font-mono text-[10px] uppercase tracking-[0.15em]"
-              aria-label="Darse la vuelta"
-            >
-              vuelta
-            </button>
-          )}
+          {/* Arriba: correr, agacharse, sentarse; abajo: darse la vuelta y la cámara */}
+          <div className="flex flex-col items-center gap-1">
+            {scene.avatars && scene.camera.walk?.roam && (
+              <div className="flex gap-1">
+                {(
+                  [
+                    ["run", "Correr (Shift)", runOn, () => setRunOn((v) => !v)],
+                    ["crouch", "Agacharse (C)", pose === 1, () => togglePose(1)],
+                    ["sit", "Sentarse (X)", pose === 2, () => togglePose(2)],
+                  ] as const
+                ).map(([icon, label, on, act]) => (
+                  <button
+                    key={icon}
+                    type="button"
+                    onClick={act}
+                    aria-pressed={on}
+                    aria-label={label}
+                    title={label}
+                    className={`ts-px-btn pointer-events-auto h-6 w-6 ${on ? "text-[#ffd600]" : ""}`}
+                  >
+                    <PixelIcon name={icon} className="h-2.5 w-2.5" />
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-3">
+              {scene.camera.walk && (
+                <button
+                  type="button"
+                  onClick={turnAround}
+                  className="ts-px-btn pointer-events-auto h-8 w-8"
+                  aria-label="Darse la vuelta"
+                  title="Darse la vuelta"
+                >
+                  <PixelIcon name="turn" className="h-3 w-3" />
+                </button>
+              )}
+              {scene.avatars && scene.camera.walk?.roam && (
+                <button
+                  type="button"
+                  onClick={() => setThird((v) => !v)}
+                  aria-pressed={third}
+                  className="ts-px-btn pointer-events-auto h-8 w-8"
+                  aria-label={third ? "Volver a primera persona" : "Verte en tercera persona"}
+                  title={third ? "Primera persona" : "Tercera persona"}
+                >
+                  <PixelIcon name={third ? "eye" : "person"} className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </>

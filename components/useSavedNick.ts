@@ -7,7 +7,7 @@ import { cleanNick } from "./ChatRoom"
 const KEY = "ts-chat-nick"
 const listeners = new Set<() => void>()
 
-const read = () => {
+export const readNick = () => {
   try {
     return cleanNick(localStorage.getItem(KEY) ?? "")
   } catch {
@@ -34,4 +34,4 @@ const subscribe = (l: () => void) => {
 }
 
 // null mientras no se sabe (en el servidor y en el primer render), "" si no hay nombre guardado
-export const useSavedNick = (): string | null => useSyncExternalStore(subscribe, read, () => null)
+export const useSavedNick = (): string | null => useSyncExternalStore(subscribe, readNick, () => null)

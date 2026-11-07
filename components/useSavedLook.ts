@@ -9,7 +9,7 @@ const listeners = new Set<() => void>()
 
 // useSyncExternalStore pide el mismo objeto mientras no cambie: se guarda el texto leído y su avatar
 let cache: { raw: string | null; look: Look | null } = { raw: null, look: null }
-const read = () => {
+export const readLook = () => {
   let raw: string | null = null
   try {
     raw = localStorage.getItem(KEY)
@@ -44,4 +44,4 @@ const subscribe = (l: () => void) => {
 }
 
 // null si todavía no se armó ninguno (o en el servidor)
-export const useSavedLook = (): Look | null => useSyncExternalStore(subscribe, read, () => null)
+export const useSavedLook = (): Look | null => useSyncExternalStore(subscribe, readLook, () => null)

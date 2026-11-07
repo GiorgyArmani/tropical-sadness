@@ -1,8 +1,9 @@
 "use client"
 
 import { useEffect, useRef, useState, type FormEvent } from "react"
-import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js"
+import type { RealtimeChannel } from "@supabase/supabase-js"
 import PixelIcon from "./PixelIcon"
+import { getClient } from "./supabase"
 
 // Chat a modo de foro: los mensajes quedan guardados en Supabase (tabla chat_messages, ver supabase/foro.sql)
 // y quien entra ve lo último que se dijo. Cada dispositivo tiene una sesión anónima que no vence.
@@ -25,22 +26,9 @@ type Msg = { id: number; nick: string; text: string; at: number }
 type Row = { id: number; nick: string; body: string; created_at: string }
 type Status = "connecting" | "online" | "error"
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
-const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-
-let client: SupabaseClient | null = null
 // Supabase reusa el canal si ya existe uno con el mismo nombre, y cerrarlo es asíncrono: hay que esperar
 // a que termine de irse antes de volver a entrar (pasa al cerrar y abrir rápido, y con StrictMode en dev)
 let leaving: Promise<unknown> = Promise.resolve()
-const getClient = () => {
-  if (!SUPABASE_URL || !SUPABASE_KEY) return null
-  client ??= createClient(SUPABASE_URL, SUPABASE_KEY, {
-    // La sesión anónima se guarda en el dispositivo y se renueva sola: dura mientras no se borren los datos
-    auth: { persistSession: true, autoRefreshToken: true, storageKey: "ts-foro-auth" },
-    realtime: { params: { eventsPerSecond: 5 } },
-  })
-  return client
-}
 
 export const cleanNick = (s: string) => s.replace(/[^\p{L}\p{N}_.-]/gu, "").slice(0, NICK_LEN)
 
@@ -221,7 +209,7 @@ export default function ChatRoom({
     if (open && status === "online") inputRef.current?.focus()
   }, [open, status])
 
-  if (!SUPABASE_URL || !SUPABASE_KEY) return null
+  if (!getClient()) return null
 
   const loadOlder = async () => {
     const supabase = getClient()

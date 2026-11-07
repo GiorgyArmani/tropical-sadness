@@ -12,8 +12,9 @@ const SEND_MS = 200
 const FOLLOW = 10 // qué tan rápido el avatar alcanza la última posición recibida (por segundo)
 const RETRY_MS = [1000, 3000, 8000, 20000, 30000]
 
-type Remote = Avatar & { id: number; nick: string; target: V3; targetYaw: number; targetWalk: number }
-export type Pose = { x: number; y: number; z: number; yaw: number; walk: number }
+type Remote = Avatar & { id: number; nick: string; target: V3; targetYaw: number; targetWalk: number; pose: number }
+// walk: 0 quieto, 1 caminando, 2 corriendo; pose: 0 de pie, 1 agachado, 2 sentado
+export type Pose = { x: number; y: number; z: number; yaw: number; walk: number; pose: number }
 
 export const createRoomLink = (url: string) => {
   let ws: WebSocket | null = null
@@ -37,16 +38,17 @@ export const createRoomLink = (url: string) => {
     others.clear()
   }
 
-  const upsert = (m: { id: number; nick?: string; look?: unknown; x?: number; y?: number; z?: number; yaw?: number; walk?: number }) => {
+  const upsert = (m: { id: number; nick?: string; look?: unknown; x?: number; y?: number; z?: number; yaw?: number; walk?: number; pose?: number }) => {
     let o = others.get(m.id)
     if (!o) {
       if (typeof m.x !== "number") return
       const pos: V3 = [m.x, m.y ?? 0, m.z ?? 0]
       const yaw = m.yaw ?? 0
-      o = { id: m.id, nick: "", pos, target: [...pos], yaw, targetYaw: yaw, walk: 0, targetWalk: 0, phase: 0, look: lookOf(""), seed: m.id * 1.7 }
+      o = { id: m.id, nick: "", pos, target: [...pos], yaw, targetYaw: yaw, walk: 0, targetWalk: 0, phase: 0, look: lookOf(""), seed: m.id * 1.7, pose: 0, crouch: 0, sit: 0 }
       others.set(m.id, o)
     }
     if (typeof m.nick === "string") o.nick = m.nick
+    if (typeof m.pose === "number") o.pose = m.pose
     o.look = cleanLook(m.look) ?? (o.nick ? lookOf(o.nick) : o.look)
   }
 
@@ -64,12 +66,13 @@ export const createRoomLink = (url: string) => {
     } else if (m.t === "join") upsert(m)
     else if (m.t === "leave") others.delete(m.id)
     else if (m.t === "s") {
-      for (const [id, x, y, z, yaw, walk] of m.p ?? []) {
+      for (const [id, x, y, z, yaw, walk, pose] of m.p ?? []) {
         const o = others.get(id)
         if (!o) continue
         o.target = [x, y, z]
         o.targetYaw = yaw
         o.targetWalk = walk
+        o.pose = pose ?? 0 // un servidor viejo no la manda
       }
     }
   }
@@ -122,15 +125,23 @@ export const createRoomLink = (url: string) => {
     send(now: number, p: Pose) {
       if (ws?.readyState !== WebSocket.OPEN || !joined || now - lastSend < SEND_MS) return
       const r = (v: number) => Math.round(v * 100) / 100
-      const msg = { t: "p", x: r(p.x), y: r(p.y), z: r(p.z), yaw: r(p.yaw), walk: r(p.walk) }
-      const key = `${msg.x},${msg.y},${msg.z},${msg.yaw},${msg.walk}`
+      const msg = {
+        t: "p",
+        x: r(p.x),
+        y: r(p.y),
+        z: r(p.z),
+        yaw: r(p.yaw),
+        walk: r(p.walk),
+        pose: p.pose,
+      }
+      const key = `${msg.x},${msg.y},${msg.z},${msg.yaw},${msg.walk},${msg.pose}`
       if (key === lastPose) return
       lastPose = key
       lastSend = now
       ws.send(JSON.stringify(msg))
     },
     // Los demás, suavizados hasta este cuadro (dt en segundos)
-    avatars(dt: number): Avatar[] {
+    avatars(dt: number): (Avatar & { nick: string })[] {
       const k = 1 - Math.exp(-FOLLOW * dt)
       for (const o of others.values()) {
         const dx = o.target[0] - o.pos[0]
@@ -141,11 +152,13 @@ export const createRoomLink = (url: string) => {
           o.pos[0] += dx * k
           o.pos[1] += (o.target[1] - o.pos[1]) * k
           o.pos[2] += dz * k
-          o.phase += Math.hypot(dx * k, dz * k) * STRIDE
+          o.phase += (Math.hypot(dx * k, dz * k) * STRIDE) / (1 + 0.5 * Math.max(o.walk - 1, 0))
         }
         const turn = ((((o.targetYaw - o.yaw + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI
         o.yaw += turn * k
         o.walk += (o.targetWalk - o.walk) * k
+        o.crouch = (o.crouch ?? 0) + ((o.pose === 1 ? 1 : 0) - (o.crouch ?? 0)) * k
+        o.sit = (o.sit ?? 0) + ((o.pose === 2 ? 1 : 0) - (o.sit ?? 0)) * k
       }
       return [...others.values()]
     },

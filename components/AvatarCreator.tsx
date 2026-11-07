@@ -2,11 +2,13 @@
 
 // El creador de avatares: a la izquierda (arriba en el celular) la figura en ASCII, girando; al lado,
 // los puntos de partida (ángel, demonio, espectro, caído) y cada parte para cambiarla. Lo armado se
-// guarda en el dispositivo y es lo que ven los demás en las salas.
+// guarda en el dispositivo y en la cuenta (con un email se recupera en otro dispositivo), y es lo que
+// ven los demás en las salas.
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, type FormEvent } from "react"
 import dynamic from "next/dynamic"
 import PixelIcon from "./PixelIcon"
+import { accountEmail, linkEmail } from "./profile"
 import { LOOK_COLORS, LOOK_PARTS, LOOK_PRESETS, lookOf, presetLook, randomLook, type Look } from "./ascii3d/engine/avatars"
 
 // El motor pesa y solo corre en el navegador: se baja recién al abrir el creador
@@ -26,6 +28,13 @@ const COLOR_LABELS: Record<keyof typeof LOOK_COLORS, string> = {
   hairColor: "pelo",
   glow: "brillo",
 }
+const EMAIL_STATUS = {
+  sending: "enviando…",
+  linked: "te enviamos un enlace: ábrelo para confirmar tu email.",
+  login: "ese email ya tiene cuenta: te enviamos un enlace para entrar con ella en este dispositivo.",
+  limit: "se enviaron muchos correos. prueba de nuevo en un rato.",
+  error: "no se pudo enviar. revisa el email y prueba de nuevo.",
+}
 const css = (c: readonly number[]) => `rgb(${c.map((v) => Math.round(v * 255)).join(",")})`
 
 export default function AvatarCreator({
@@ -44,6 +53,21 @@ export default function AvatarCreator({
   const step = (k: keyof typeof LOOK_PARTS, d: number) => {
     const n = LOOK_PARTS[k].length
     set(k, (look[k] + d + n) % n)
+  }
+
+  // La cuenta: con email, el avatar se recupera en otro dispositivo
+  const [email, setEmail] = useState<string | null>(null)
+  const [typed, setTyped] = useState("")
+  const [mailStatus, setMailStatus] = useState<keyof typeof EMAIL_STATUS | null>(null)
+  useEffect(() => {
+    accountEmail().then(setEmail)
+  }, [])
+  const sendEmail = async (e: FormEvent) => {
+    e.preventDefault()
+    const v = typed.trim()
+    if (!v || mailStatus === "sending") return
+    setMailStatus("sending")
+    setMailStatus(await linkEmail(v))
   }
 
   // Escape cierra sin guardar
@@ -137,6 +161,36 @@ export default function AvatarCreator({
                 </div>
               </fieldset>
             ))}
+          </div>
+
+          <div className="grid gap-2 border-t border-white/15 pt-3">
+            <span className="uppercase tracking-[0.15em] text-white/60">tu cuenta</span>
+            {email ? (
+              <p className="text-white/70">guardado en {email}. entra con ese email en otro dispositivo y tendrás tu avatar.</p>
+            ) : (
+              <form onSubmit={sendEmail} className="grid gap-2">
+                <p className="text-white/55">guarda tu avatar con tu email para usarlo en otro dispositivo.</p>
+                <div className="flex gap-2">
+                  <input
+                    type="email"
+                    required
+                    value={typed}
+                    onChange={(e) => setTyped(e.target.value)}
+                    placeholder="tu@email.com"
+                    aria-label="Tu email"
+                    className="h-7 min-w-0 flex-1 border border-white/30 bg-black px-2 text-[11px] text-white outline-none focus:border-[#ffd600]"
+                  />
+                  <button type="submit" disabled={mailStatus === "sending"} className="ts-px-btn h-7 px-3 text-[10px] uppercase tracking-[0.15em]">
+                    enviar
+                  </button>
+                </div>
+                {mailStatus && (
+                  <p role="status" className="text-white/70">
+                    {EMAIL_STATUS[mailStatus]}
+                  </p>
+                )}
+              </form>
+            )}
           </div>
 
           <div className="mt-auto flex justify-end gap-2 pt-2">

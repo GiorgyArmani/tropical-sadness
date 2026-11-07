@@ -16,6 +16,7 @@ import RadioGate from "./RadioGate"
 import StaticBurst, { type StaticBurstHandle } from "./StaticBurst"
 import { saveNick, useSavedNick } from "./useSavedNick"
 import { saveLook, useSavedLook } from "./useSavedLook"
+import { pushProfile, startProfileSync } from "./profile"
 
 // El sampler pesa (motor de audio y su interfaz): se baja recién al entrar al estudio
 const Sampler = dynamic(() => import("./sampler/Sampler"), { ssr: false })
@@ -39,6 +40,8 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
   const look = useSavedLook()
   const [avatarOpen, setAvatarOpen] = useState(false)
   const closeAvatar = useCallback(() => setAvatarOpen(false), [])
+  // El nick y el avatar guardados en la cuenta (Supabase) llegan a este dispositivo
+  useEffect(() => startProfileSync(), [])
   // Los dos mundos quedan montados y el que no se ve, en pausa: pasar de uno a otro no rearma nada.
   // El 3D se prepara solo en segundo plano a los pocos segundos (contexto y shaders), así el primer
   // cambio tampoco se traba.
@@ -253,6 +256,7 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
           onClose={closeAvatar}
           onSave={(l) => {
             saveLook(l)
+            pushProfile(true)
             setAvatarOpen(false)
           }}
         />
@@ -265,6 +269,7 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
             tuned.current = true
             radioRef.current?.connect()
             saveNick(n)
+            pushProfile()
           }}
         />
       )}

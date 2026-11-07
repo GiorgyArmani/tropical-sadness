@@ -5,10 +5,11 @@
 //
 // Protocolo (JSON):
 //   cliente -> { t: "hi", scene, nick, look }                    entrar (o cambiar de escena o de avatar)
-//   cliente -> { t: "p", x, y, z, yaw, walk }                     dónde está (hasta ~5 por segundo)
+//   cliente -> { t: "p", x, y, z, yaw, walk, pose }               dónde está (hasta ~5 por segundo)
 //   servidor -> { t: "welcome", id, room, players: [Player] }     al entrar: quiénes ya están
 //   servidor -> { t: "join", ...Player } / { t: "leave", id }     alguien llegó o se fue
-//   servidor -> { t: "s", p: [[id, x, y, z, yaw, walk], ...] }    posiciones, TICK_MS, solo si cambiaron
+//   servidor -> { t: "s", p: [[id, x, y, z, yaw, walk, pose], ...] } posiciones, TICK_MS, solo si cambiaron
+//   (walk: 0 quieto, 1 caminando, 2 corriendo; pose: 0 de pie, 1 agachado, 2 sentado)
 //
 // Variables: PORT (8080), ALLOWED_ORIGINS (dominios separados por coma; vacío = cualquiera, solo para probar)
 
@@ -37,7 +38,7 @@ export const cleanNick = (v) => {
 }
 // El avatar: cada campo es el número de una opción del creador. Los topes son los de LOOK_LIMITS en
 // components/ascii3d/engine/avatars.ts (si se agrega una opción allá, hay que subirlo acá)
-const LOOK_LIMITS = { body: 2, hair: 4, dress: 4, wings: 4, crown: 4, tail: 2, skin: 5, cloth: 6, hairColor: 6, glow: 6 }
+const LOOK_LIMITS = { body: 2, hair: 6, dress: 5, wings: 7, crown: 6, tail: 2, skin: 5, cloth: 6, hairColor: 7, glow: 6 }
 export const cleanLook = (v) => {
   if (!v || typeof v !== "object") return null
   const out = {}
@@ -52,9 +53,10 @@ export const cleanPos = (m) => {
   const y = num(m.y, WORLD)
   const z = num(m.z, WORLD)
   const yaw = num(m.yaw, 1e4)
-  const walk = num(m.walk, 1)
+  const walk = num(m.walk, 2)
+  const pose = m.pose === 1 || m.pose === 2 ? m.pose : 0
   if (x === null || y === null || z === null || yaw === null || walk === null) return null
-  return { x, y, z, yaw: yaw % (Math.PI * 2), walk: Math.max(0, walk) }
+  return { x, y, z, yaw: yaw % (Math.PI * 2), walk: Math.max(0, walk), pose }
 }
 const r2 = (v) => Math.round(v * 100) / 100
 
@@ -141,7 +143,7 @@ const tick = () => {
     if (!room.dirty) continue
     room.dirty = false
     const list = []
-    for (const p of room.players.values()) if (p.pos) list.push([p.id, r2(p.pos.x), r2(p.pos.y), r2(p.pos.z), r2(p.pos.yaw), r2(p.pos.walk)])
+    for (const p of room.players.values()) if (p.pos) list.push([p.id, r2(p.pos.x), r2(p.pos.y), r2(p.pos.z), r2(p.pos.yaw), r2(p.pos.walk), p.pos.pose])
     broadcast(room, { t: "s", p: list })
   }
 }
