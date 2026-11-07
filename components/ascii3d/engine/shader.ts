@@ -101,6 +101,20 @@ void main() {
     }
     if (t > uStart + MAXD) break;
   }
+#ifdef AVATARS
+  // Los avatares, en una pasada aparte y solo hasta donde chocó el mundo (engine/avatars.ts): metidos
+  // en map() el compilador los copiaba en cada consulta al mundo y el shader tardaba 10 veces más
+  float am;
+  vec3 an;
+  float tav = avatarsTrace(rd, m >= 0.0 ? t : uStart + MAXD, pxA, am, an);
+  if (tav > 0.0) {
+    t = tav;
+    m = am;
+  }
+  bool av = m >= AV_MAT;
+#else
+  bool av = false;
+#endif
   // El cielo se calcula una sola vez (sirve de fondo y de color de la niebla): en algunas escenas es lo
   // más caro del shader
   vec3 sk = sky(rd);
@@ -113,10 +127,22 @@ void main() {
     vec3 n = vec3(0.0, 1.0, 0.0);
     // Si la niebla ya lo tapa todo, ni se calcula la superficie
     if (fogK < 0.985) {
-      n = calcNormal(p, max(0.002, t * pxA * 0.25)); // de lejos, una normal más suave (menos ruido)
-      // La sombra de los rincones mide menos de un metro: si una celda cubre más de 25 cm no se ve
-      float ao = t * pxA < 0.25 ? calcAO(p, n) : 1.0;
-      col = mix(shade(p, n, rd, m, ao), sk, fogK);
+#ifdef AVATARS
+      if (av) {
+        n = an;
+        col = mix(avatarShade(p, n, rd, m), sk, fogK);
+      } else
+#endif
+      {
+        n = calcNormal(p, max(0.002, t * pxA * 0.25)); // de lejos, una normal más suave (menos ruido)
+        // La sombra de los rincones mide menos de un metro: si una celda cubre más de 25 cm no se ve
+        float ao = t * pxA < 0.25 ? calcAO(p, n) : 1.0;
+        vec3 sc = shade(p, n, rd, m, ao);
+#ifdef AVATARS
+        sc *= avatarBlob(p); // la sombra de contacto debajo de cada avatar
+#endif
+        col = mix(sc, sk, fogK);
+      }
     }
     // Esquina (idea de AcerolaFX: bordes por normales). Donde dos paredes se juntan la profundidad
     // casi no salta, así que el borde de profundidad no la ve. Se da un paso de un píxel de costado,
@@ -126,7 +152,7 @@ void main() {
     // caer la página
     float crease = 0.0;
 #ifdef CREASES
-    if (uCrease > 0.5 && t * pxA < 0.5 && fogK < 0.9 && max(dot(col, vec3(0.299, 0.587, 0.114)), 0.6 * max(col.r, max(col.g, col.b))) > 0.06) {
+    if (!av && uCrease > 0.5 && t * pxA < 0.5 && fogK < 0.9 && max(dot(col, vec3(0.299, 0.587, 0.114)), 0.6 * max(col.r, max(col.g, col.b))) > 0.06) {
       float cell = t * pxA;
       vec3 ta = normalize(uRt - n * dot(uRt, n) + 1e-4) * cell;
       vec3 tb = normalize(uUp - n * dot(uUp, n) + 1e-4) * cell;
@@ -149,6 +175,12 @@ void main() {
   vec3 gw = glow(rd, m >= 0.0 ? t : 1e4);
   col += gw;
   if (max(gw.r, max(gw.g, gw.b)) > 0.5) depth = 254.0 / 255.0;
+#endif
+#ifdef AVATARS
+  // Los ojos de los avatares y lo que brilla en ellos (aureola, alas de luz), con la misma marca
+  vec3 aura = avatarAura(rd, m >= 0.0 ? t : 1e4, pxA);
+  col += aura;
+  if (max(aura.r, max(aura.g, aura.b)) > 0.5 || (m >= AV_MAT && abs(avatarPart(m) - 4.0) < 0.5)) depth = 254.0 / 255.0;
 #endif
   gl_FragColor = vec4(clamp(col, 0.0, 1.0), depth);
 }
@@ -206,12 +238,12 @@ export type ShaderSource = { id: string; glsl: string }
 // Compilar un shader de raymarching tarda bastante. Se hace en dos partes: arrancar (no espera)
 // y terminar (pide el resultado). Con KHR_parallel_shader_compile el navegador compila en otro
 // hilo y se puede preguntar si ya terminó sin trabar la página.
-export const createShaderCache = (gl: GL, build: (glsl: string) => string, onCompiled?: () => void) => {
+export const createShaderCache = <S extends ShaderSource>(gl: GL, build: (s: S) => string, onCompiled?: () => void) => {
   const programs = new Map<string, Program | null>()
   const pending = new Map<string, WebGLProgram>()
   const parallel = gl.getExtension("KHR_parallel_shader_compile") as { COMPLETION_STATUS_KHR: number } | null
 
-  const start = (s: ShaderSource) => {
+  const start = (s: S) => {
     const shader = (type: number, src: string) => {
       const sh = gl.createShader(type)!
       gl.shaderSource(sh, src)
@@ -220,13 +252,13 @@ export const createShaderCache = (gl: GL, build: (glsl: string) => string, onCom
     }
     const prog = gl.createProgram()!
     gl.attachShader(prog, shader(gl.VERTEX_SHADER, VERT))
-    gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, build(s.glsl)))
+    gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, build(s)))
     gl.bindAttribLocation(prog, 0, "a")
     gl.linkProgram(prog)
     return prog
   }
 
-  const finish = (s: ShaderSource, prog: WebGLProgram): Program | null => {
+  const finish = (s: S, prog: WebGLProgram): Program | null => {
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
       for (const sh of gl.getAttachedShaders(prog) ?? []) {
         const log = gl.getShaderInfoLog(sh)
@@ -238,12 +270,12 @@ export const createShaderCache = (gl: GL, build: (glsl: string) => string, onCom
     return new Program(gl, prog)
   }
 
-  const request = (s: ShaderSource) => {
+  const request = (s: S) => {
     if (!programs.has(s.id) && !pending.has(s.id)) pending.set(s.id, start(s))
   }
 
   // ¿Está lista? Sin esperar solo responde que sí si el navegador ya terminó en segundo plano
-  const ready = (s: ShaderSource, wait: boolean) => {
+  const ready = (s: S, wait: boolean) => {
     if (programs.has(s.id)) return true
     request(s)
     const p = pending.get(s.id)!

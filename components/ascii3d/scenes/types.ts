@@ -34,6 +34,7 @@ export type Scene3D = {
   detail?: AsciiDetail // "fine" (por defecto): más escalones de luz y trazos donde la luz cambia; "classic": como antes
   nightBoost?: number // exposición extra de noche (0.8 = 80% más con el cielo apagado)
   lights?: (ctx: LightCtx) => LightSet // luces dinámicas del cuadro (ver engine/lighting.ts)
+  avatars?: boolean // se ven las otras personas (engine/avatars.ts); por ahora solo en planos redondos
   camera: {
     target: [number, number, number] // punto que se mira
     yaw: number // giro alrededor del punto (0 = mirando hacia -z)

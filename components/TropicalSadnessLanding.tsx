@@ -15,9 +15,13 @@ import ChatRoom, { ChatToggle } from "./ChatRoom"
 import RadioGate from "./RadioGate"
 import StaticBurst, { type StaticBurstHandle } from "./StaticBurst"
 import { saveNick, useSavedNick } from "./useSavedNick"
+import { saveLook, useSavedLook } from "./useSavedLook"
 
 // El sampler pesa (motor de audio y su interfaz): se baja recién al entrar al estudio
 const Sampler = dynamic(() => import("./sampler/Sampler"), { ssr: false })
+// El creador de avatares trae su propio motor para la vista previa: se baja recién al abrirlo
+const AvatarCreator = dynamic(() => import("./AvatarCreator"), { ssr: false })
+const HAS_ROOMS = !!process.env.NEXT_PUBLIC_ROOMS_URL
 
 type Mode = "2d" | "3d"
 
@@ -32,6 +36,9 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
   const tuned = useRef(false) // la radio ya arrancó con un gesto en esta visita
   const [mode, setMode] = useState<Mode>(initialMode)
   const [chatOpen, setChatOpen] = useState(false)
+  const look = useSavedLook()
+  const [avatarOpen, setAvatarOpen] = useState(false)
+  const closeAvatar = useCallback(() => setAvatarOpen(false), [])
   // Los dos mundos quedan montados y el que no se ve, en pausa: pasar de uno a otro no rearma nada.
   // El 3D se prepara solo en segundo plano a los pocos segundos (contexto y shaders), así el primer
   // cambio tampoco se traba.
@@ -154,7 +161,9 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
       {has3d && (
         <div className={mode === "3d" ? "absolute inset-0" : "hidden"}>
           <Ascii3D
-            active={mode === "3d" && !samplerOpen}
+            active={mode === "3d" && !samplerOpen && !avatarOpen}
+            nick={nick}
+            look={look}
             scene={scene3d}
             entry={place.entry}
             visit={place.visit}
@@ -201,6 +210,17 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
             <PixelIcon name="right" className="h-2.5 w-2.5" />
           </button>
         ) : null}
+        {/* Solo con el servidor de salas conectado: sin él nadie más vería el avatar */}
+        {mode === "3d" && nick && HAS_ROOMS && (
+          <button
+            type="button"
+            onClick={() => setAvatarOpen(true)}
+            aria-haspopup="dialog"
+            className="ts-px-btn h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em]"
+          >
+            avatar
+          </button>
+        )}
         {nick && <ChatToggle open={chatOpen} onClick={() => setChatOpen((o) => !o)} className="hidden lg:inline-flex" />}
       </div>
 
@@ -225,6 +245,18 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
       <MusicBar ref={radioRef} silenced={inStudio} />
 
       {inStudio && samplerOpen && <Sampler onMinimize={() => setSamplerOpen(false)} onLeave={backToHall} />}
+
+      {avatarOpen && nick && (
+        <AvatarCreator
+          nick={nick}
+          initial={look}
+          onClose={closeAvatar}
+          onSave={(l) => {
+            saveLook(l)
+            setAvatarOpen(false)
+          }}
+        />
+      )}
 
       {saved === "" && (
         <RadioGate

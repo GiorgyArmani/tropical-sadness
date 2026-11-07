@@ -16,9 +16,13 @@ import { clamp, hash, rgb } from "../ascii/math"
 import PixelIcon, { type PixelIconName } from "../PixelIcon"
 import { createLiveSky } from "./live"
 import { AsciiFilm } from "./engine/ascii"
-import { Camera, dolly, sub, GLSL_CAMERA, type V3 } from "./engine/camera"
-import { GLSL_LIGHTING, LightRig } from "./engine/lighting"
-import { createShaderCache, fullscreenTriangle, GLSL_HEADER, GLSL_LIB, GLSL_RAYMARCH } from "./engine/shader"
+import { Camera, dolly, sub, type V3 } from "./engine/camera"
+import { LightRig } from "./engine/lighting"
+import { MAX_AVATARS, uploadAvatars, withAvatars, type Avatar, type Look } from "./engine/avatars"
+import { createBots, stepBots } from "./bots"
+import { createRoomLink } from "./net"
+import { createShaderCache, fullscreenTriangle } from "./engine/shader"
+import { buildShader } from "./world"
 import { DOOR_GAP, DOORS, kindAt, SCENE_OF, sideOf, type Entry } from "./maze"
 import { createSfx } from "./sfx"
 import type { Scene3D } from "./scenes"
@@ -33,34 +37,10 @@ const LENS = { fovFlat: 5, fovWide: 80, zoomMax: ZOOM_MAX }
 const OUT_MS = 550 // al irse: la cámara se mete de golpe y todo se vuelve estática
 const IN_MS = 1000 // al llegar: la estática se disuelve y el lente se abre desde plano
 const ENTRY_ZOOM = 0.35
+// El servidor de salas en vivo (server/rooms). Sin él, los avatares son solo los bots de prueba
+const ROOMS_URL = process.env.NEXT_PUBLIC_ROOMS_URL
+const WALK_SPEED = 1.3 // metros por segundo que cuentan como caminar del todo (para el paso del avatar)
 
-// Uniforms del mundo de este juego: el cielo en vivo, el laberinto y el susto
-const GLSL_WORLD = /* glsl */ `
-// Cielo y clima en vivo (colores de 0 a 1)
-uniform vec3 uSkyTop;
-uniform vec3 uSkyHor;
-uniform vec3 uSkyCloud;
-uniform float uLight;
-uniform float uStars;
-uniform vec3 uSunDir;
-uniform vec3 uLightCol;
-uniform float uClouds;
-uniform float uRain;
-uniform float uFlash;
-// Laberinto: nivel del pasillo, número de la puerta que se abre y cuánto (0 cerrada, 1 abierta)
-uniform float uLevel;
-uniform float uDoor;
-uniform float uOpen;
-// Susto: dónde está el demonio (xyz) y si está (w), hacia dónde mira, y cuánto se apagan las luces
-uniform vec4 uScare;
-uniform float uScareA;
-uniform float uDim;
-// La aparición al fondo del pasillo: x = segundos desde que apareció (-1 = no está), y = qué es
-// (0 demonio, 1 un par de ojos, 2 varios)
-uniform vec2 uAppear;
-`
-
-const buildShader = (glsl: string) => GLSL_HEADER + GLSL_CAMERA + GLSL_WORLD + GLSL_LIGHTING + GLSL_LIB + glsl + GLSL_RAYMARCH
 
 type GL = WebGLRenderingContext
 
@@ -80,6 +60,8 @@ type Props = {
   onEnter?: (kind: number, from: Entry) => void // se cruzó una puerta del pasillo
   onLeave?: () => void // se llegó al final de una escena que sale (la puerta de arriba de la escalera)
   onAction?: () => void // se tocó el botón de la cosa que se usa en la escena (camera.action)
+  nick?: string // con qué nombre se entra a las salas en vivo (sin nick no se conecta)
+  look?: Look | null // el avatar que se armó (sin él, los demás ven uno al azar según el nick)
   // false = montado pero en pausa (mientras se ve el 2D): no dibuja, solo termina de preparar shaders
   active?: boolean
   ref?: Ref<Ascii3DHandle>
@@ -125,6 +107,8 @@ export default function Ascii3D({
   onEnter,
   onLeave,
   onAction,
+  nick = "",
+  look = null,
   active = true,
   ref,
 }: Props) {
@@ -157,6 +141,12 @@ export default function Ascii3D({
   useEffect(() => {
     calls.current = { onNear, onEnter, onLeave, onAction }
   }, [onNear, onEnter, onLeave, onAction])
+  const nickRef = useRef(nick)
+  const avatarLookRef = useRef(look)
+  useEffect(() => {
+    nickRef.current = nick
+    avatarLookRef.current = look
+  }, [nick, look])
   useEffect(() => {
     if (active && !activeRef.current) wakeRef.current = true
     activeRef.current = active
@@ -230,8 +220,20 @@ export default function Ascii3D({
     // En el celular los shaders se arman sin la búsqueda de esquinas: son 4 copias más del mundo
     // adentro del shader, y en la GPU del celular un shader así de grande hacía caer la página
     // al entrar a una escena (Safari y Chrome lo compilan recién ahí)
-    const shaders = createShaderCache(gl, (glsl) => (phone ? "" : "#define CREASES\n") + buildShader(glsl), () => (hitch = true))
+    const shaders = createShaderCache<Scene3D>(
+      gl,
+      (s) => (phone ? "" : "#define CREASES\n") + buildShader(s.glsl),
+      () => (hitch = true),
+    )
     const { request, ready, parallel } = shaders
+    // La misma escena con avatares es otro programa: tarda unos segundos más en compilar, así que se
+    // prepara aparte, sin frenar la llegada, y se usa recién cuando está lista y hay alguien que mostrar
+    const crowdSources = new Map<string, Scene3D>()
+    const crowdSource = (sc: Scene3D) => {
+      let s = crowdSources.get(sc.id)
+      if (!s) crowdSources.set(sc.id, (s = { ...sc, id: `${sc.id}+avatares`, glsl: withAvatars(sc.glsl) }))
+      return s
+    }
     const camera = new Camera()
     camera.reset(sceneRef.current.camera.yaw, sceneRef.current.camera.pitch)
     camRef.current = camera
@@ -293,6 +295,14 @@ export default function Ascii3D({
     }
     const firstCam = sceneRef.current.camera // si se entra directo a un plano redondo (?escena=)
     if (firstCam.walk?.roam) placeRoam(firstCam)
+    // Bots para probar los avatares sin red: ?bots=N
+    const botCount = clamp(parseInt(new URLSearchParams(window.location.search).get("bots") ?? "", 10) || 0, 0, MAX_AVATARS)
+    const botsFor = (sc: Scene3D) => createBots(sc.avatars ? botCount : 0, sc.camera)
+    let bots = botsFor(sceneRef.current)
+    // Las otras personas de la sala (si hay servidor) y cuánto se camina uno (para su avatar)
+    const link = ROOMS_URL ? createRoomLink(ROOMS_URL) : null
+    let myStep = 0
+    let myWalk = 0
     // Transición: "out" se mete en la escena actual, "in" aparece la nueva desde plano
     let phase: { kind: "in" | "out" | "none"; at: number } = { kind: "in", at: performance.now() }
     camera.want.zoom = ENTRY_ZOOM
@@ -334,6 +344,7 @@ export default function Ascii3D({
         placeRoam(sc.camera)
       }
       stopRef.current = { held: null, passed: null, push: 0, prev: walk, dir: 1 }
+      bots = botsFor(sc)
       scare = null
       facingSign = 1
       // Recién llegado al pasillo hay un rato de calma antes del primer susto
@@ -403,7 +414,7 @@ export default function Ascii3D({
         if (phase.kind === "in") phase.at = now
         return
       }
-      const program = shaders.get(sc.id)
+      let program = shaders.get(sc.id)
       if (!program) return
 
       // Cámara suavizada hacia lo que pide el visitante
@@ -517,6 +528,7 @@ export default function Ascii3D({
             roamY += ((floor(nx, nz) ?? here) - roamY) * ease(0.3)
           }
           walk += Math.hypot(nx - roamPos.x, nz - roamPos.z) // para el balanceo del paso
+          myStep += Math.hypot(nx - roamPos.x, nz - roamPos.z)
           roamPos = { x: nx, z: nz }
           const bob = reduced ? 0 : Math.sin(walk * 2.2) * 0.025
           // Al salir se empuja un poco hacia donde se mira
@@ -699,6 +711,24 @@ export default function Ascii3D({
       }
       actionShown = pin(actionBtnRef.current, actAt, actionShown)
 
+      // Los avatares del cuadro: las personas de la sala y, para probar, los bots
+      const dt = fs / FPS
+      stepBots(bots, dt)
+      // Salas en vivo: solo en planos redondos con avatares, ya adentro (no mientras se sale)
+      const inRoom = !!sc.avatars && !!cam.walk?.roam && phase.kind !== "out"
+      link?.want(inRoom ? sc.id : null, nickRef.current, avatarLookRef.current)
+      myWalk += (clamp(myStep / dt / WALK_SPEED, 0, 1) - myWalk) * ease(0.3)
+      myStep = 0
+      if (inRoom) link?.send(now, { x: roamPos.x, y: roamY, z: roamPos.z, yaw, walk: myWalk })
+      const people = link?.avatars(dt) ?? []
+      const crowd: Avatar[] = people.length ? [...people, ...bots].slice(0, MAX_AVATARS) : bots
+      if (sc.avatars && crowd.length && phase.kind !== "out") {
+        // Con compilación en paralelo se pregunta sin esperar; sin ella se espera una vez (la primera
+        // vez que aparece alguien)
+        const withCrowd = crowdSource(sc)
+        if (ready(withCrowd, !parallel)) program = shaders.get(withCrowd.id) ?? program
+      }
+
       program.use()
       program.f1("uTime", t)
       program.f1("uStart", cam.walk ? 0 : Math.max(0, dist - cam.clip))
@@ -742,6 +772,7 @@ export default function Ascii3D({
       program.f1("uScareA", scare?.ang ?? 0)
       program.f1("uDim", dim)
       program.f2("uAppear", appOn ? appT : -1, appKind)
+      uploadAvatars(program, crowd)
       // La foto, revelada en ASCII
       const tick = Math.floor(now / 50)
       camera.shoot(program, film, { exposure, saturation: sc.saturation, grade: sc.grade, detail: sc.detail }, staticAmt, tick)
@@ -765,6 +796,7 @@ export default function Ascii3D({
     const loop = (now: number) => {
       frame = requestAnimationFrame(loop)
       if (!activeRef.current) {
+        link?.want(null, "", null) // en 2D (o con el sampler abierto) no se ocupa lugar en la sala
         // En pausa: no se dibuja nada; con compilación en paralelo se siguen preparando las escenas
         if (parallel && now >= preloadAt) {
           wanted().forEach((s) => ready(s, false))
@@ -880,6 +912,7 @@ export default function Ascii3D({
     return () => {
       cancelAnimationFrame(frame)
       liveSky.stop()
+      link?.close()
       sfx.close()
       window.removeEventListener("resize", resize)
       window.removeEventListener("keydown", onKey)

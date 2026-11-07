@@ -163,6 +163,7 @@ export const STAIRS: Scene3D = {
   label: "la escalera",
   blurb: "espacio 02 · escaleras que suben y bajan entre nubes; una sola puerta vuelve al pasillo",
   glsl: stairs,
+  avatars: true,
   exposure: 1.5,
   outdoor: true,
   // Se camina libre por los descansos y las escaleras (el piso lo dice stairsFloor). Al entrar por la

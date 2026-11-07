@@ -387,6 +387,7 @@ export const FOG: Scene3D = {
   blurb: "espacio 05 · algo enorme te mira desde la bruma",
   glsl: fog,
   lights: fogLights,
+  avatars: true,
   exposure: 1.1,
   saturation: 0.4,
   grade: 0,
