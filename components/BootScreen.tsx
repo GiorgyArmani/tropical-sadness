@@ -116,7 +116,7 @@ export default function BootScreen() {
         </div>
         <div className="ts-boot-splash">
           <img
-            src="/logo-trim.png"
+            src="/logo-trim.webp"
             alt="Tropical Sadness 革命"
             width={634}
             height={701}

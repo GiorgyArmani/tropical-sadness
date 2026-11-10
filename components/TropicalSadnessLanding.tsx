@@ -20,6 +20,7 @@ import StaticBurst, { type StaticBurstHandle } from "./StaticBurst"
 import { saveNick, useSavedNick } from "./useSavedNick"
 import { saveLook, useSavedLook } from "./useSavedLook"
 import { pushProfile, startProfileSync } from "./profile"
+import WelcomeMail from "./WelcomeMail"
 
 // El sampler pesa (motor de audio y su interfaz): se baja recién al entrar al estudio
 const Sampler = dynamic(() => import("./sampler/Sampler"), { ssr: false })
@@ -330,7 +331,7 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
             <section className="pointer-events-none absolute right-2 top-2 z-10 sm:right-3 sm:top-3">
               <h1 className="sr-only">Tropical Sadness</h1>
               <img
-                src="/logo-trim.png"
+                src="/logo-trim.webp"
                 alt="Tropical Sadness 革命"
                 width={634}
                 height={701}
@@ -411,6 +412,8 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
           }}
         />
       )}
+
+      <WelcomeMail nick={nick} look={look} />
 
       {saved === "" && (
         <RadioGate

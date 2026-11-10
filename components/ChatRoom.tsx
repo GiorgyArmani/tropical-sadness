@@ -1,11 +1,11 @@
 "use client"
 
 import { useEffect, useRef, useState, type FormEvent } from "react"
-import type { RealtimeChannel } from "@supabase/supabase-js"
+import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js"
 import { SAY_EVENT } from "./ascii3d/bubbles"
 import OsIcon from "./OsIcon"
 import PixelIcon from "./PixelIcon"
-import { getClient } from "./supabase"
+import { HAS_SUPABASE, getClient } from "./supabase"
 
 // Chat a modo de foro: los mensajes quedan guardados en Supabase (tabla chat_messages, ver supabase/foro.sql)
 // y quien entra ve lo último que se dijo. Cada dispositivo tiene una sesión anónima que no vence.
@@ -109,6 +109,7 @@ export default function ChatRoom({
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const keepScroll = useRef<number | null>(null) // al cargar anteriores, no saltar al final
+  const sbRef = useRef<SupabaseClient | null>(null) // el cliente de Supabase, desde la primera conexión
 
   // Pestaña oculta más de un minuto: se suelta la conexión (no gasta cuota) y al volver se retoma
   useEffect(() => {
@@ -127,8 +128,9 @@ export default function ChatRoom({
 
   // Conexión: sesión anónima, canal en vivo y los últimos mensajes guardados
   useEffect(() => {
-    const supabase = getClient()
-    if (!open || !nick || !visible || !supabase) return
+    // Supabase se baja recién acá, la primera vez que se abre el chat
+    const client = open && nick && visible ? getClient() : null
+    if (!client) return
 
     let stopped = false
     let channel: RealtimeChannel | null = null
@@ -136,6 +138,9 @@ export default function ChatRoom({
     const start = async () => {
       setStatus("connecting")
       await leaving
+      const supabase = await client
+      if (!supabase) throw new Error("no se pudo bajar Supabase")
+      sbRef.current = supabase
       const { data: auth } = await supabase.auth.getSession()
       if (!auth.session) {
         const { error } = await supabase.auth.signInAnonymously()
@@ -174,7 +179,8 @@ export default function ChatRoom({
 
     return () => {
       stopped = true
-      if (channel) leaving = supabase.removeChannel(channel).catch(() => {})
+      const ch = channel
+      if (ch) leaving = client.then((sb) => sb?.removeChannel(ch)).catch(() => {})
     }
   }, [open, nick, visible, attempt])
 
@@ -211,10 +217,10 @@ export default function ChatRoom({
     if (open && status === "online") inputRef.current?.focus()
   }, [open, status])
 
-  if (!getClient()) return null
+  if (!HAS_SUPABASE) return null
 
   const loadOlder = async () => {
-    const supabase = getClient()
+    const supabase = sbRef.current
     const oldest = messages[0]?.id
     if (!supabase || !oldest || loadingOlder) return
     setLoadingOlder(true)
@@ -230,7 +236,7 @@ export default function ChatRoom({
 
   const send = async (e: FormEvent) => {
     e.preventDefault()
-    const supabase = getClient()
+    const supabase = sbRef.current
     const body = cleanText(text)
     if (!supabase || !body || status !== "online" || Date.now() < cooldownUntil) return
     const t = Date.now()

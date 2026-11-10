@@ -30,25 +30,31 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) {
 
 const FPS = 30
 const CAM_TAN = Math.tan((24 * Math.PI) / 360)
+const SHOT_FRAME = 20 // la foto se saca con la figura ya dibujada y un poco girada
 
-export default function AvatarPreview({ look, className = "" }: { look: Look; className?: string }) {
+// onShot: si se pasa, recibe una sola vez una foto (JPEG, como data URL) de la figura. Es la que va en el
+// correo de bienvenida (WelcomeMail)
+export default function AvatarPreview({ look, className = "", onShot }: { look: Look; className?: string; onShot?: (jpeg: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const textRef = useRef<HTMLCanvasElement>(null)
   const layerRef = useRef<HTMLDivElement>(null)
   const lookRef = useRef(look)
+  const shotRef = useRef(onShot)
   useEffect(() => {
     lookRef.current = look
-  }, [look])
+    shotRef.current = onShot
+  }, [look, onShot])
 
   useEffect(() => {
     const canvas = canvasRef.current!
+    const text = textRef.current!
     const layer = layerRef.current!
     const gl = document.createElement("canvas").getContext("webgl", { premultipliedAlpha: false, antialias: false, alpha: true, preserveDrawingBuffer: true })
     if (!gl) return
     fullscreenTriangle(gl)
     const phone = window.matchMedia("(pointer: coarse)").matches || /Android/i.test(navigator.userAgent)
     const shaders = createShaderCache<ShaderSource>(gl, (s) => (phone ? "" : "#define CREASES\n") + buildShader(withAvatars(s.glsl)))
-    const film = new AsciiFilm(canvas, textRef.current!, null, phone)
+    const film = new AsciiFilm(canvas, text, null, phone)
     film.resize()
     const camera = new Camera()
     const rig = new LightRig()
@@ -59,6 +65,7 @@ export default function AvatarPreview({ look, className = "" }: { look: Look; cl
     let spin = 0.35 // radianes por segundo; arrastrando se frena y se gira a mano
     let last = 0
     let frame = 0
+    let shown = 0 // cuadros con la figura, para la foto
 
     let drag: { x: number } | null = null
     const onDown = (e: PointerEvent) => {
@@ -112,6 +119,16 @@ export default function AvatarPreview({ look, className = "" }: { look: Look; cl
       // Entra de pies a aureola, también el espectro que flota y las alas abiertas
       camera.orbit([0, 1.12, 0], yaw, 0.1, 5.6, CAM_TAN)
       camera.shoot(program, film, { exposure: 1.25, saturation: 0.8, grade: 0.12, detail: "fine" }, 0, tick)
+      // La foto se copia acá mismo: las letras las estampa la GPU y, pasado el cuadro, ese lienzo ya está en blanco
+      if (shotRef.current && ++shown === SHOT_FRAME) {
+        const out = document.createElement("canvas")
+        out.width = text.width
+        out.height = text.height
+        const ctx = out.getContext("2d")!
+        ctx.fillRect(0, 0, out.width, out.height)
+        ctx.drawImage(text, 0, 0)
+        shotRef.current(out.toDataURL("image/jpeg", 0.85))
+      }
     }
     const loop = (now: number) => {
       frame = requestAnimationFrame(loop)
