@@ -1,7 +1,7 @@
 "use client"
 
-import { useRef, useState, useEffect, useImperativeHandle, type CSSProperties, type Ref } from "react"
-import PixelIcon from "./PixelIcon"
+import { useRef, useState, useEffect, useImperativeHandle, type Ref } from "react"
+import OsIcon from "./OsIcon"
 
 // Lo que está al aire. Es una radio: no se elige tema ni se adelanta, se sintoniza.
 // `scene` lleva al visitante al escenario del mix (ver components/ascii/scenes)
@@ -12,14 +12,14 @@ export const NOW_PLAYING: { title: string; artist: string; file: string; scene?:
   scene: "cementerio",
 }
 
-export type RadioHandle = { connect: () => void }
+export type RadioHandle = { connect: () => void; disconnect: () => void }
 
 // Todos escuchan el mismo momento: la posición sale del reloj, no de cuándo entraste
 const livePosition = (duration: number) => (Date.now() / 1000) % duration
 
 export const DUCK_EVENT = "ts-duck"
 
-// silenced: en el estudio la radio se calla (y la barra se esconde); al salir vuelve al vivo si estaba sonando
+// silenced: en el estudio la radio se calla (y se esconde de la barra de tareas); al salir vuelve al vivo si estaba sonando
 export default function MusicBar({ ref, silenced = false }: { ref?: Ref<RadioHandle>; silenced?: boolean }) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const syncPending = useRef(false)
@@ -45,7 +45,13 @@ export default function MusicBar({ ref, silenced = false }: { ref?: Ref<RadioHan
     audio.play().catch(() => setTuning(false))
   }
 
-  useImperativeHandle(ref, () => ({ connect }))
+  // Desconectar (al apagar el sistema): tampoco vuelve sola al salir del estudio
+  const disconnect = () => {
+    wasOn.current = false
+    audioRef.current?.pause()
+  }
+
+  useImperativeHandle(ref, () => ({ connect, disconnect }))
 
   useEffect(() => {
     silencedRef.current = silenced
@@ -135,68 +141,65 @@ export default function MusicBar({ ref, silenced = false }: { ref?: Ref<RadioHan
 
   const label = `${NOW_PLAYING.title} · ${NOW_PLAYING.artist}`
 
+  // La radio es la parte de la barra de tareas que va a la izquierda: el botón de inicio conecta y
+  // desconecta, el visor dice qué suena y al lado quedan el silencio y el volumen
   return (
-    <div
-      role="region"
-      aria-label="Radio"
-      hidden={silenced}
-      className="pointer-events-none fixed inset-x-0 bottom-0 z-40 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-8 sm:pb-5"
-    >
+    <div role="region" aria-label="Radio" hidden={silenced} className="flex min-w-0 flex-1 items-center gap-1">
       <audio ref={audioRef} src={NOW_PLAYING.file} preload="metadata" loop />
 
-      <div className="ts-px-panel pointer-events-auto relative mx-auto flex h-9 max-w-2xl items-center gap-2.5 pl-1.5 pr-2 font-mono sm:gap-3">
-        <button
-          type="button"
-          onClick={toggle}
-          aria-label={isPlaying ? "Desconectar" : "Conectar"}
-          title={isPlaying ? "desconectar" : undefined}
-          className={`ts-px-btn h-6 gap-1.5 px-2 text-[10px] uppercase tracking-[0.15em] ${isPlaying ? "" : "ts-px-btn--primary"}`}
-        >
-          {isPlaying ? (
-            <>
-              <span className="ts-onair h-1.5 w-1.5 bg-[#ff3b3b]" aria-hidden="true" />
-              {tuning ? "sintonizando" : "en vivo"}
-            </>
-          ) : (
-            "conectar"
-          )}
-        </button>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={isPlaying ? "Desconectar" : "Conectar"}
+        title={isPlaying ? "desconectar" : undefined}
+        className={`ts-px-btn ts-bold h-7 gap-1.5 pl-1 pr-2 ${isPlaying ? "ts-px-btn--on" : ""}`}
+      >
+        <OsIcon name="tropi" />
+        {isPlaying ? (
+          <>
+            <span className="ts-onair h-2 w-2 bg-[#ff3b3b]" aria-hidden="true" />
+            en vivo
+          </>
+        ) : (
+          "conectar"
+        )}
+      </button>
 
-        <p className="min-w-0 flex-1 overflow-hidden whitespace-nowrap text-[10px] uppercase tracking-[0.18em] text-white sm:text-[11px]" title={label}>
-          {isPlaying ? (
-            <span className="ts-marquee">
-              <span className="pr-10">{label}</span>
-              <span className="pr-10" aria-hidden="true">
-                {label}
-              </span>
+      <p className="ts-lcd flex h-7 min-w-0 flex-1 items-center overflow-hidden whitespace-nowrap px-2" title={label}>
+        {tuning ? (
+          <span className="block truncate">sintonizando…</span>
+        ) : isPlaying ? (
+          <span className="ts-marquee">
+            <span className="pr-10">{label}</span>
+            <span className="pr-10" aria-hidden="true">
+              {label}
             </span>
-          ) : (
-            <span className="block truncate">{label}</span>
-          )}
-        </p>
+          </span>
+        ) : (
+          <span className="block truncate">{label}</span>
+        )}
+      </p>
 
-        <button
-          type="button"
-          onClick={() => setMuted((m) => !m)}
-          aria-label={muted ? "Activar sonido" : "Silenciar"}
-          className="ts-px-btn h-6 w-6"
-        >
-          <PixelIcon name={muted || volume === 0 ? "mute" : "sound"} className="h-3 w-3" />
-        </button>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          value={muted ? 0 : volume}
-          aria-label="Volumen"
-          onChange={(e) => {
-            setVolume(Number(e.target.value))
-            setMuted(false)
-          }}
-          className="ts-range hidden w-14 sm:block"
-          style={{ "--fill": `${muted ? 0 : volume}%` } as CSSProperties}
-        />
-      </div>
+      <button
+        type="button"
+        onClick={() => setMuted((m) => !m)}
+        aria-label={muted ? "Activar sonido" : "Silenciar"}
+        className="ts-px-btn h-7 w-7"
+      >
+        <OsIcon name={muted || volume === 0 ? "mute" : "sound"} />
+      </button>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={muted ? 0 : volume}
+        aria-label="Volumen"
+        onChange={(e) => {
+          setVolume(Number(e.target.value))
+          setMuted(false)
+        }}
+        className="ts-range hidden w-16 sm:block"
+      />
     </div>
   )
 }

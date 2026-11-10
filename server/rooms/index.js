@@ -6,9 +6,11 @@
 // Protocolo (JSON):
 //   cliente -> { t: "hi", scene, nick, look }                    entrar (o cambiar de escena o de avatar)
 //   cliente -> { t: "p", x, y, z, yaw, walk, pose }               dónde está (hasta ~5 por segundo)
+//   cliente -> { t: "say", text }                                 lo que escribió en el chat (su burbuja)
 //   servidor -> { t: "welcome", id, room, players: [Player] }     al entrar: quiénes ya están
 //   servidor -> { t: "join", ...Player } / { t: "leave", id }     alguien llegó o se fue
 //   servidor -> { t: "s", p: [[id, x, y, z, yaw, walk, pose], ...] } posiciones, TICK_MS, solo si cambiaron
+//   servidor -> { t: "say", id, text }                            alguien de la sala escribió (a los demás)
 //   (walk: 0 quieto, 1 caminando, 2 corriendo; pose: 0 de pie, 1 agachado, 2 sentado)
 //
 // Variables: PORT (8080), ALLOWED_ORIGINS (dominios separados por coma; vacío = cualquiera, solo para probar)
@@ -29,6 +31,8 @@ const MAX_PER_IP = 12 // freno a quien abre muchas (alto: en datos móviles much
 const MSG_PER_SEC = 20 // un cliente normal manda ~5; más del doble de esto lo desconecta
 const SCENE = /^[a-z]{1,24}$/
 const WORLD = 2000 // metros: nada legítimo está más lejos
+const SAY_LEN = 200 // como el chat
+const SAY_MS = 1500 // una burbuja cada tanto como mucho (el chat ya tiene su modo lento; esto frena a quien lo saltea)
 
 // --- Validación: lo que llega del navegador no se cree ---
 const num = (v, lim) => (typeof v === "number" && Number.isFinite(v) ? Math.max(-lim, Math.min(lim, v)) : null)
@@ -58,6 +62,9 @@ export const cleanPos = (m) => {
   if (x === null || y === null || z === null || yaw === null || walk === null) return null
   return { x, y, z, yaw: yaw % (Math.PI * 2), walk: Math.max(0, walk), pose }
 }
+// Lo dicho: una línea, sin caracteres de control ni espacios de más, hasta SAY_LEN
+export const cleanSay = (v) =>
+  typeof v === "string" ? v.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, SAY_LEN) : ""
 const r2 = (v) => Math.round(v * 100) / 100
 
 // --- Salas ---
@@ -134,6 +141,12 @@ const onMessage = (p, raw) => {
     // La primera posición lo presenta (hasta ahí no se sabía dónde dibujarlo)
     if (first) broadcast(p.room, { t: "join", ...publicOf(p) }, p)
     p.room.dirty = true
+  } else if (m.t === "say" && p.room && p.pos) {
+    // Solo quien ya está a la vista de los demás, y no más de una cada SAY_MS
+    const text = cleanSay(m.text)
+    if (!text || now - p.saidAt < SAY_MS) return
+    p.saidAt = now
+    broadcast(p.room, { t: "say", id: p.id, text }, p)
   }
 }
 
@@ -173,7 +186,7 @@ export const start = (port = PORT) => {
     if (wss.clients.size >= MAX_CONN || (perIp.get(ip) ?? 0) >= MAX_PER_IP) return refuse(socket, 429, "Too Many Requests")
     wss.handleUpgrade(req, socket, head, (ws) => {
       perIp.set(ip, (perIp.get(ip) ?? 0) + 1)
-      const p = { id: nextId++, ws, ip, nick: "anon", look: null, pos: null, room: null, alive: true, count: 0, windowAt: 0 }
+      const p = { id: nextId++, ws, ip, nick: "anon", look: null, pos: null, room: null, alive: true, count: 0, windowAt: 0, saidAt: 0 }
       ws.on("pong", () => (p.alive = true))
       ws.on("message", (data, isBinary) => {
         if (!isBinary) onMessage(p, data.toString())

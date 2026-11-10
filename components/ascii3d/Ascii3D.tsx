@@ -20,6 +20,7 @@ import { Camera, dolly, sub, type V3 } from "./engine/camera"
 import { LightRig } from "./engine/lighting"
 import { lookOf, MAX_AVATARS, STRIDE, uploadAvatars, withAvatars, type Avatar, type Look } from "./engine/avatars"
 import { createBots, stepBots } from "./bots"
+import { SAY_EVENT, SAY_MAX, drawBubble, sayAlpha, sayLife, type Said } from "./bubbles"
 import { createRoomLink } from "./net"
 import { createShaderCache, fullscreenTriangle } from "./engine/shader"
 import { buildShader } from "./world"
@@ -44,6 +45,7 @@ const THIRD_AIM = 1.2 // y a qué altura del avatar mira (el pecho)
 const THIRD_TILT = 0.25 // cuánto más desde arriba mira que en primera persona
 const ROAM_SPEED = 1.8 // metros por segundo como mucho en los planos redondos (más rápido, el ASCII se rompe)
 const ROAM_QUEUE = 0.9 // metros que se pueden acumular empujando (al soltar se frena enseguida)
+const SLIDE_TURNS = [0.35, -0.35, 0.7, -0.7, 1.05, -1.05] // giros del paso (radianes) para resbalar por un borde
 const RUN_X = 2 // corriendo se va al doble
 const CROUCH_X = 0.5 // agachado, a la mitad
 
@@ -337,6 +339,15 @@ export default function Ascii3D({
     let bots = botsFor(sceneRef.current)
     // Las otras personas de la sala (si hay servidor) y cuánto se camina uno (para su avatar)
     const link = ROOMS_URL ? createRoomLink(ROOMS_URL) : null
+    // Lo último que uno dijo en el chat (su burbuja, bubbles.ts). Si está en una sala, va también a los demás
+    let mySay: Said | null = null
+    let inRoomNow = false
+    const onSay = (e: Event) => {
+      const text = String((e as CustomEvent).detail ?? "").slice(0, SAY_MAX)
+      if (!text) return
+      mySay = { text, at: performance.now() }
+      if (inRoomNow) link?.say(text)
+    }
     let myStep = 0
     let myWalk = 0
     let thirdK = 0 // 0 primera persona, 1 tercera (suavizado)
@@ -562,22 +573,29 @@ export default function Ascii3D({
             nx = roam.center[0] + (ox / out) * roam.radius
             nz = roam.center[1] + (oz / out) * roam.radius
           }
-          // Con piso (escaleras): solo se pasa donde hay dónde pararse y sin saltos de altura. Si de
-          // frente no se puede, se resbala por el borde (solo x o solo z)
+          // Con piso (escaleras, la cresta): solo se pasa donde hay dónde pararse y sin saltos de altura.
+          // Si de frente no se puede, se resbala por el borde: primero solo en x o solo en z (si eso
+          // avanza algo) y si no, girando el paso de a poco para un lado y el otro, con menos avance
+          // cuanto más se gira. Así los bordes en diagonal (el camino curvo de la cresta) no traban
           const floor = roam.floor
           if (floor) {
             const here = floor(roamPos.x, roamPos.z) ?? roamY
             const ok = (x: number, z: number) => {
               const h = floor(x, z)
-              return h !== null && Math.abs(h - here) < 0.6
+              return h !== null && Math.abs(h - here) < 0.6 && Math.hypot(x - roam.center[0], z - roam.center[1]) <= roam.radius
             }
             if (!ok(nx, nz)) {
-              if (ok(nx, roamPos.z)) nz = roamPos.z
-              else if (ok(roamPos.x, nz)) nx = roamPos.x
-              else {
-                nx = roamPos.x
-                nz = roamPos.z
+              const tries: [number, number][] = [
+                [nx - roamPos.x, 0],
+                [0, nz - roamPos.z],
+              ]
+              for (const a of SLIDE_TURNS) {
+                const s = stepM * Math.cos(a)
+                tries.push([-Math.sin(yaw + a) * s, -Math.cos(yaw + a) * s])
               }
+              const slide = tries.find(([dx, dz]) => Math.abs(dx) + Math.abs(dz) > 1e-4 && ok(roamPos.x + dx, roamPos.z + dz))
+              nx = roamPos.x + (slide?.[0] ?? 0)
+              nz = roamPos.z + (slide?.[1] ?? 0)
             }
             roamY += ((floor(nx, nz) ?? here) - roamY) * ease(0.3)
           }
@@ -804,6 +822,7 @@ export default function Ascii3D({
       stepBots(bots, dt)
       // Salas en vivo: solo en planos redondos con avatares, ya adentro (no mientras se sale)
       const inRoom = !!sc.avatars && !!cam.walk?.roam && phase.kind !== "out"
+      inRoomNow = inRoom
       link?.want(inRoom ? sc.id : null, nickRef.current, avatarLookRef.current)
       myWalk += (clamp(myStep / dt / ROAM_SPEED, 0, 2) - myWalk) * ease(0.3) // 1 caminando, 2 corriendo
       myStep = 0
@@ -841,7 +860,7 @@ export default function Ascii3D({
         )
       } else rig.clear()
       rig.upload(program)
-      const sky = liveSky.read(now, t)
+      const sky = liveSky.read(now, t, !!sc.weather)
       // De noche se puede abrir más la exposición; de día no, o el cielo se quema
       const exposure = (sc.exposure ?? 1) * (1 + (sc.nightBoost ?? 0) * (1 - sky.light)) * phoneBoost
       const wea = sky.wea
@@ -883,21 +902,34 @@ export default function Ascii3D({
           for (let j = 0; j < 3; j++) ctx.fillText(j === 2 ? "'" : ch, x + slant * lh * j, y - lh * j)
         }
       }
-      // El nick de cada persona sobre su cabeza (los bots no tienen), más tenue de lejos
-      if (sc.avatars && people.length && phase.kind !== "out" && staticAmt < 0.5) {
+      // Sobre la cabeza de cada persona, su nick (los bots no tienen), más tenue de lejos; y encima, lo
+      // último que dijo en el chat, un rato. La burbuja propia se ve en tercera persona (sobre el avatar)
+      const heads: (Avatar & { nick: string; say?: Said })[] =
+        me.length && mySay && now - mySay.at < sayLife(mySay.text) ? [...people, { ...me[0], nick: "", say: mySay }] : people
+      if (sc.avatars && heads.length && phase.kind !== "out" && staticAmt < 0.5) {
         const ctx = film.ctx
-        ctx.textAlign = "center"
-        for (const o of people) {
-          if (!o.nick) continue
+        for (const o of heads) {
           const far = Math.hypot(o.pos[0] - ro[0], o.pos[2] - ro[2])
           if (far > 16) continue
-          const q = camera.project([o.pos[0], o.pos[1] + 2.05, o.pos[2]])
+          // La cabeza baja si está agachado o sentado
+          const q = camera.project([o.pos[0], o.pos[1] + 2.05 - 0.72 * (o.sit ?? 0) - 0.3 * (o.crouch ?? 0), o.pos[2]])
           if (!q) continue
           const sp = film.toScreen(q)
-          ctx.fillStyle = rgb([235, 225, 245], 0.9 * clamp((16 - far) / 6, 0, 1))
-          ctx.fillText(o.nick, sp.x, sp.y - film.lh)
+          const near = clamp((16 - far) / 6, 0, 1)
+          let tip = sp.y
+          if (o.nick) {
+            // Con contorno oscuro: se lee también sobre los cielos claros (la cresta al atardecer)
+            ctx.textAlign = "center"
+            ctx.lineWidth = 2
+            ctx.strokeStyle = rgb([20, 16, 31], 0.9 * near)
+            ctx.strokeText(o.nick, sp.x, sp.y - film.lh)
+            ctx.fillStyle = rgb([235, 225, 245], 0.9 * near)
+            ctx.fillText(o.nick, sp.x, sp.y - film.lh)
+            ctx.textAlign = "start"
+            tip -= film.lh
+          }
+          if (o.say) drawBubble(ctx, o.say.text, sp.x, tip - 2, near * sayAlpha(o.say, now))
         }
-        ctx.textAlign = "start"
       }
       film.glow()
     }
@@ -906,6 +938,7 @@ export default function Ascii3D({
       frame = requestAnimationFrame(loop)
       if (!activeRef.current) {
         link?.want(null, "", null) // en 2D (o con el sampler abierto) no se ocupa lugar en la sala
+        inRoomNow = false
         // En pausa: no se dibuja nada; con compilación en paralelo se siguen preparando las escenas
         if (parallel && now >= preloadAt) {
           wanted().forEach((s) => ready(s, false))
@@ -1024,6 +1057,7 @@ export default function Ascii3D({
     window.addEventListener("keydown", onKey)
     window.addEventListener("keyup", onKeyUp)
     window.addEventListener("blur", onBlur)
+    window.addEventListener(SAY_EVENT, onSay)
 
     resize()
     window.addEventListener("resize", resize)
@@ -1037,6 +1071,7 @@ export default function Ascii3D({
       window.removeEventListener("keydown", onKey)
       window.removeEventListener("keyup", onKeyUp)
       window.removeEventListener("blur", onBlur)
+      window.removeEventListener(SAY_EVENT, onSay)
       window.removeEventListener("touchend", sfx.unlock, { capture: true })
       document.removeEventListener("gesturestart", noGesture)
       layer.removeEventListener("pointerdown", onDown)
@@ -1053,9 +1088,10 @@ export default function Ascii3D({
     <>
       <div aria-hidden="true" className="pointer-events-none absolute inset-0">
         <canvas ref={textRef} className="absolute inset-0 h-full w-full" />
-        <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+        {/* El de encima (lluvia, nicks y burbujas del chat) pasa sobre el logo de la página (z-10) y
+            queda debajo del vidrio CRT (z-15) y de los controles */}
+        <canvas ref={canvasRef} className="absolute inset-0 z-[12] h-full w-full" />
         <canvas ref={glowRef} className="absolute inset-0 h-full w-full opacity-45 mix-blend-screen blur-md" />
-        <div className="ascii-scanlines absolute inset-0" />
       </div>
       <div ref={layerRef} aria-hidden="true" className="absolute inset-0 cursor-grab touch-none select-none active:cursor-grabbing" />
       <p ref={failRef} hidden className="absolute inset-x-0 top-1/2 text-center font-mono text-xs text-white/60">
@@ -1068,7 +1104,7 @@ export default function Ascii3D({
         onClick={() => void (openReq.current = true)}
         aria-label="Abrir la puerta"
         style={{ position: "absolute", left: 0, top: 0, visibility: "hidden" }}
-        className="ts-px-btn ts-px-btn--primary pointer-events-auto z-20 h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em] will-change-transform"
+        className="ts-px-btn ts-px-btn--primary ts-os pointer-events-auto z-20 h-7 gap-1.5 px-2.5 lowercase will-change-transform"
       >
         abrir puerta
         <PixelIcon name="right" className="h-2.5 w-2.5" />
@@ -1079,7 +1115,7 @@ export default function Ascii3D({
         onClick={() => calls.current.onLeave?.()}
         aria-label="Volver al pasillo por la puerta"
         style={{ position: "absolute", left: 0, top: 0, visibility: "hidden" }}
-        className="ts-px-btn ts-px-btn--primary pointer-events-auto z-20 h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em] will-change-transform"
+        className="ts-px-btn ts-px-btn--primary ts-os pointer-events-auto z-20 h-7 gap-1.5 px-2.5 lowercase will-change-transform"
       >
         volver al pasillo
         <PixelIcon name="right" className="h-2.5 w-2.5" />
@@ -1089,7 +1125,7 @@ export default function Ascii3D({
         type="button"
         onClick={() => calls.current.onAction?.()}
         style={{ position: "absolute", left: 0, top: 0, visibility: "hidden" }}
-        className="ts-px-btn ts-px-btn--primary pointer-events-auto z-20 h-7 gap-1.5 px-2.5 font-mono text-[11px] uppercase tracking-[0.15em] will-change-transform"
+        className="ts-px-btn ts-px-btn--primary ts-os pointer-events-auto z-20 h-7 gap-1.5 px-2.5 lowercase will-change-transform"
       >
         {scene.camera.action?.label ?? "usar"}
       </button>
@@ -1133,7 +1169,7 @@ export default function Ascii3D({
                     aria-pressed={on}
                     aria-label={label}
                     title={label}
-                    className={`ts-px-btn pointer-events-auto h-6 w-6 ${on ? "text-[#ffd600]" : ""}`}
+                    className={`ts-px-btn pointer-events-auto h-6 w-6 ${on ? "ts-px-btn--on" : ""}`}
                   >
                     <PixelIcon name={icon} className="h-2.5 w-2.5" />
                   </button>

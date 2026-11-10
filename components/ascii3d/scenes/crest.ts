@@ -1,25 +1,78 @@
-import type { V3 } from "../engine/camera"
 import type { Scene3D } from "./types"
 import { g } from "./types"
 
 // --- La cresta: una escalera de madera con barandas sobre el lomo de una montaña verde, encima de un
-// mar de nubes, con la curva del planeta y el sol de frente. Se va sobre riel: la rueda sube o baja por
-// la escalera y la vista gira sola con las curvas; se mira libre a los costados y para abajo.
-// En la cima, una puerta vuelve al pasillo.
-// La forma del lomo (por dónde va y qué tan alto) se define una vez acá: de ella salen el GLSL y el riel.
+// mar de nubes, con la curva del planeta y el sol de frente. Se camina libre (plano redondo con piso):
+// por la escalera, entre las barandas, y por tres claros donde el lomo se abre en una meseta redonda,
+// sin barandas ni helechos y con un círculo de piedras: la llegada, el mirador de la mitad y la cumbre.
+// Son para quedarse mirando el mar de nubes o juntarse con otros (en esta escena se ven los avatares).
+// En la cumbre, una puerta vuelve al pasillo.
+// La forma del lomo (por dónde va, qué tan alto y dónde se abre) se define una vez acá: de ella salen el
+// GLSL y crestFloor(), la altura del piso por donde se camina, así nunca se desfasan.
 
 const CREST = { len: 260, x: [14, 0.021, 4, 0.057, 1.3], h: [6, 0.28, 6, 0.045, 1.2, 0.11] }
 const crestX = (z: number) => Math.sin(z * CREST.x[1]) * CREST.x[0] + Math.sin(z * CREST.x[3] + CREST.x[4]) * CREST.x[2]
-const crestH = (z: number) =>
+// La altura del lomo, sin los claros
+const crestH0 = (z: number) =>
   CREST.h[0] +
   Math.max(0, -z) * CREST.h[1] +
   Math.sin(z * CREST.h[3]) * CREST.h[2] +
   Math.sin(z * CREST.h[5]) * CREST.h[4] -
   Math.max(0, z) * 0.6 - // detrás del principio el lomo baja a las nubes
   Math.max(0, -CREST.len - z) * 1.2 // y pasando la cima también
-// El riel: a los s metros se está en z = -s, sobre el lomo
-const crestRail = (s: number): V3 => [crestX(-s), crestH(-s), -s]
+
+// Los claros: z de su centro (sobre el lomo) y r su radio. La llegada y el mirador van donde el lomo ya
+// es casi plano; en la cumbre se aplana. x y h salen del lomo
+const CLEARINGS = [
+  { z: -9, r: 5 }, // la llegada
+  { z: -121, r: 8 }, // el mirador, a mitad de camino y a 43 m sobre las nubes
+  { z: -249, r: 5.5 }, // la cumbre, antes de la puerta
+].map((c) => {
+  // Hacia dónde sigue el camino ahí (x, z), para el círculo de piedras
+  const dx = crestX(c.z - 1) - crestX(c.z + 1)
+  const n = Math.hypot(dx, 2)
+  return { ...c, x: crestX(c.z), h: crestH0(c.z), fw: [dx / n, -2 / n] as const }
+})
+const FLAT_T = 8 // metros en que el lomo pasa de su pendiente a la altura de un claro
+const smoothstep = (a: number, b: number, x: number) => {
+  const t = Math.min(Math.max((x - a) / (b - a), 0), 1)
+  return t * t * (3 - 2 * t)
+}
+// La altura del lomo: alrededor de cada claro queda a la altura del claro (misma cuenta que rH en GLSL)
+const crestH = (z: number) => {
+  let h = crestH0(z)
+  for (const c of CLEARINGS) h += (c.h - h) * (1 - smoothstep(c.r, c.r + FLAT_T, Math.abs(z - c.z)))
+  return h
+}
 const CREST_DOOR_Z = -(CREST.len - 1)
+const ARRIVE = 6 // se aparece a estos metros del principio: adentro del claro de la llegada
+const PATH_HALF = 0.45 // medio ancho por donde se camina en la escalera (las barandas están a 0.65)
+
+const RAIL_GAP = 0.6 // las barandas empiezan a estos metros del borde de cada claro (GLSL: RAIL_GAP - cd)
+// La altura del pasto en (x, z) cerca del claro c: la meseta o la ladera del lomo (lo mismo que el GLSL,
+// sin el ruido de la vegetación, que solo está en las laderas)
+const grassAt = (x: number, z: number, c: (typeof CLEARINGS)[number]) => {
+  const side = Math.max(0, Math.abs(x - crestX(z)) - 0.9)
+  const rim = Math.max(0, Math.hypot(x - c.x, z - c.z) - c.r)
+  return Math.max(crestH(z) - 0.3 - side * 1.1 - side * side * 0.05, c.h - 0.02 - rim * 1.1 - rim * rim * 0.05)
+}
+
+// La altura del piso en (x, z), o null donde no hay dónde pararse: los claros (con un margen en el
+// borde) y la escalera entre las barandas, desde la llegada hasta la puerta de la cumbre
+const crestFloor = (x: number, z: number): number | null => {
+  if (z > CLEARINGS[0].z + CLEARINGS[0].r || z < CREST_DOOR_Z - 0.5) return null
+  const off = Math.abs(x - crestX(z))
+  const onPath = z <= CLEARINGS[0].z // detrás de la llegada no se baja
+  for (const c of CLEARINGS) {
+    const e = Math.hypot(x - c.x, z - c.z) - (c.r - 0.4)
+    if (e <= 0) return c.h
+    // Donde la escalera sale del claro se abre en embudo, así se entra sin tener que apuntar justo.
+    // Se cierra en diagonal hasta donde empiezan las barandas; fuera de los tablones se pisa el pasto
+    const open = RAIL_GAP + 0.4 - e
+    if (open > 0 && onPath && off <= PATH_HALF + open * 1.4) return off <= 0.5 ? crestH(z) : grassAt(x, z, c)
+  }
+  return onPath && off <= PATH_HALF ? crestH(z) : null
+}
 
 const crest = /* glsl */ `
 #define FOG 0.006
@@ -27,14 +80,30 @@ const crest = /* glsl */ `
 #define HAS_GLOW
 
 const vec3 SUN = vec3(0.15, 0.42, -1.0) / 1.095; // de frente, alto
+#define AV_SUN SUN // los avatares se iluminan con este sol y no con el del cielo real
 
 // Colores que giran (psicodelia): el tono h da la vuelta al arcoíris
 vec3 pal(float h) { return 0.5 + 0.5 * cos(6.2832 * (h + vec3(0.0, 0.33, 0.67))); }
+// Los claros (CLEARINGS en JS): centro x, z, radio y altura; y hacia dónde sigue el camino ahí
+${CLEARINGS.map((c, i) => `const vec4 CL${i} = vec4(${g(c.x)}, ${g(c.z)}, ${g(c.r)}, ${g(c.h)});\nconst vec2 CF${i} = vec2(${g(c.fw[0])}, ${g(c.fw[1])});`).join("\n")}
+// El claro más cercano al punto que mira map() (lo pone al empezar, con clearing). rH aplana solo
+// alrededor de ese, que es el único que puede estar cerca (están a más de 100 m entre sí): map() llama
+// a rH muchas veces y el compilador copia map() en cada lugar que la usa, así que cada cuenta pesa
+vec4 gCl;
+vec2 gFw;
 // Misma cuenta que crestX y crestH en JS
 float rX(float z) { return sin(z * ${g(CREST.x[1])}) * ${g(CREST.x[0])} + sin(z * ${g(CREST.x[3])} + ${g(CREST.x[4])}) * ${g(CREST.x[2])}; }
 float rH(float z) {
-  return ${g(CREST.h[0])} + max(0.0, -z) * ${g(CREST.h[1])} + sin(z * ${g(CREST.h[3])}) * ${g(CREST.h[2])} + sin(z * ${g(CREST.h[5])}) * ${g(CREST.h[4])}
+  float h = ${g(CREST.h[0])} + max(0.0, -z) * ${g(CREST.h[1])} + sin(z * ${g(CREST.h[3])}) * ${g(CREST.h[2])} + sin(z * ${g(CREST.h[5])}) * ${g(CREST.h[4])}
     - max(0.0, z) * 0.6 - max(0.0, ${g(-CREST.len)} - z) * 1.2;
+  return mix(h, gCl.w, 1.0 - smoothstep(gCl.z, gCl.z + ${g(FLAT_T)}, abs(z - gCl.y)));
+}
+// Busca el claro más cercano a q (en el plano) y lo deja en gCl y gFw. Devuelve cuánto falta para su
+// borde (negativo adentro)
+float clearing(vec2 q) {
+  float d = 1e3;
+${CLEARINGS.map((_, i) => `  { float e = length(q - CL${i}.xy) - CL${i}.z; if (e < d) { d = e; gCl = CL${i}; gFw = CF${i}; } }`).join("\n")}
+  return d;
 }
 
 // Una fronda de helecho que sale de base hacia el rumbo a: sube, se arquea y cae. Es una cinta fina con
@@ -61,6 +130,9 @@ float frond(vec3 p, vec3 base, float a, float L, float W, float lift) {
 
 vec2 map(vec3 p) {
   float z = p.z;
+  // El claro más cercano: rH aplana el lomo a su alrededor
+  float cd = clearing(p.xz);
+  vec4 cl = gCl;
   float cx = rX(z);
   float h = rH(z);
   float dx = p.x - cx;
@@ -69,6 +141,11 @@ vec2 map(vec3 p) {
   // la vegetación que lo vuelve rugoso
   float side = max(0.0, ax - 0.9);
   float ground = h - 0.3 - side * 1.1 - side * side * 0.05;
+  // Los claros: una meseta redonda y plana, al ras de los escalones, que cae como el lomo por los bordes
+  float rim = max(0.0, cd);
+  float mesa = cl.w - 0.02 - rim * 1.1 - rim * rim * 0.05;
+  side = mesa > ground ? rim : side;
+  ground = max(ground, mesa);
   // La vegetación de las laderas (ruido) solo donde hay ladera
   if (side > 0.5) ground += (fbm2(p.xz * 0.35) - 0.5) * 1.4 * smoothstep(0.5, 3.0, side);
   // El paso seguro depende de la pendiente de ahí: casi plano arriba del lomo (pasos largos), cada
@@ -91,7 +168,20 @@ vec2 map(vec3 p) {
     float zp = (floor(z / 1.8) + 0.5) * 1.8;
     vec3 pp = vec3(abs(p.x - rX(zp)) - 0.65, p.y - rH(zp), z - zp);
     float post = sdCapsule(pp, vec3(0.0), vec3(0.0, 0.95, 0.0), 0.03);
-    r = opU(r, vec2(min(rail * 0.85, post), 3.0));
+    // En los claros no hay barandas: el lomo queda abierto (empiezan a RAIL_GAP del borde)
+    r = opU(r, vec2(max(min(rail * 0.85, post), ${g(RAIL_GAP)} - cd), 3.0));
+  }
+  // En cada claro, un círculo de piedras chatas para sentarse, partido en dos por el camino: tres de
+  // cada lado, mirándose (solo de cerca y a la altura del claro)
+  if (cd < 0.5 && abs(p.y - cl.w) < 1.2) {
+    vec2 q = p.xz - cl.xy;
+    vec2 l = vec2(abs(q.x * gFw.y - q.y * gFw.x), dot(q, gFw)); // al costado del camino (espejado) y a lo largo
+    // Sobre un arco de radio R: la del medio enfrente, y las otras dos corridas a lo largo y un poco hacia el camino
+    float R = cl.z * 0.55;
+    float k = clamp(floor(l.y / (R * 0.565) + 0.5), -1.0, 1.0);
+    // Una esfera aplastada (más barata que sdEllipsoid; para piedras alcanza)
+    vec3 sq = vec3(l.x - R * (1.0 - 0.175 * abs(k)), p.y - cl.w - 0.08, l.y - k * R * 0.565);
+    r = opU(r, vec2((length(sq * vec3(1.0, 1.8, 1.2)) - 0.55) * 0.55, 5.0));
   }
   // Vegetación de montaña a los dos lados de la escalera (solo cerca del lomo):
   //   matas de helecho: un racimo de frondas que se abren en roseta, y al pie una mata baja
@@ -103,6 +193,8 @@ vec2 map(vec3 p) {
     float zn = zi + (fract(z / 1.3) < 0.5 ? -1.0 : 1.0);
     for (int k = 0; k < 2; k++) {
       float zc = ((k == 0 ? zi : zn) + 0.5) * 1.3;
+      // A lo ancho de un claro no hay: queda abierto (y así nunca quedan hundidos en la ladera de la meseta)
+      if (abs(zc - cl.y) < cl.z + 3.0) continue;
       for (int sd = 0; sd < 2; sd++) {
         float sg = sd == 0 ? -1.0 : 1.0;
         float hv = hash2(vec2(zc, sg * 3.7));
@@ -125,6 +217,7 @@ vec2 map(vec3 p) {
     float tn = ti + (fract(z / 4.6) < 0.5 ? -1.0 : 1.0);
     for (int k = 0; k < 2; k++) {
       float zc = ((k == 0 ? ti : tn) + 0.5) * 4.6;
+      if (abs(zc - cl.y) < cl.z + 3.0) continue;
       for (int sd = 0; sd < 2; sd++) {
         float sg = sd == 0 ? -1.0 : 1.0;
         float hv = hash2(vec2(zc * 1.3, sg * 9.1));
@@ -143,7 +236,7 @@ vec2 map(vec3 p) {
     }
   }
   // La puerta de la cima, de frente a quien sube
-  vec3 dp = p - vec3(rX(${g(CREST_DOOR_Z)}), rH(${g(CREST_DOOR_Z)}) + 1.2, ${g(CREST_DOOR_Z)});
+  vec3 dp = p - vec3(${g(crestX(CREST_DOOR_Z))}, ${g(crestH(CREST_DOOR_Z) + 1.2)}, ${g(CREST_DOOR_Z)});
   if (sdBox(dp, vec3(0.95, 1.35, 0.2)) < r.x) {
     float frame = min(min(sdBox(dp - vec3(-0.75, 0.0, 0.0), vec3(0.1, 1.2, 0.1)), sdBox(dp - vec3(0.75, 0.0, 0.0), vec3(0.1, 1.2, 0.1))), sdBox(dp - vec3(0.0, 1.2, 0.0), vec3(0.85, 0.1, 0.1)));
     r = opU(r, vec2(frame, 5.0));
@@ -302,20 +395,29 @@ export const CREST_SCENE: Scene3D = {
   label: "la cresta",
   blurb: "espacio 07 · una escalera sobre el lomo de la montaña, encima de las nubes",
   glsl: crest,
+  avatars: true,
   exposure: 1.2,
   saturation: 1,
   grade: 0.1,
   outdoor: true,
-  // Sobre riel: la rueda sube o baja por la escalera y la vista sigue las curvas. En la cima, la
-  // puerta vuelve al pasillo
+  // Se camina libre por la escalera y los claros (el piso lo dice crestFloor). Sin avance solo: en los
+  // claros uno se queda quieto mirando. Al llegar a la puerta de la cumbre se vuelve al pasillo
   camera: {
-    target: [0, 1.6, 0], // y = altura de los ojos sobre los escalones
+    target: [crestX(-ARRIVE), 1.6, 0], // y = altura de los ojos sobre el piso
     yaw: 0,
     pitch: 0.08,
     frame: 1.4,
     clip: 1e4,
     pitchRange: [-1.2, 1.2],
-    walk: { drift: 0.25, loop: CREST.len - 2, fov: 74, flash: 3, exit: true, start: 3, rail: crestRail, speed: 1 },
+    walk: {
+      drift: 0,
+      loop: CREST.len,
+      fov: 74,
+      flash: 2.5,
+      start: ARRIVE,
+      speed: 1,
+      roam: { center: [0, -130], radius: 142, floor: crestFloor, exitAt: [crestX(CREST_DOOR_Z), CREST_DOOR_Z], exitR: 0.7 },
+    },
     exitDoor: { at: [crestX(CREST_DOOR_Z), crestH(CREST_DOOR_Z) + 1.2, CREST_DOOR_Z], facing: [0, 0, 1] },
   },
 }

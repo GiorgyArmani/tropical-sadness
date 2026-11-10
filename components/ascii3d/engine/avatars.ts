@@ -16,7 +16,8 @@
 // por uniforms (uploadAvatars); un programa sin avatares ignora esos uniforms.
 //
 // Usa del mundo (world.ts) uSunDir, uLightCol, uLight, uSkyHor y uSkyTop: así un avatar se lee
-// también afuera, de día o de noche, aunque la escena no tenga luces dinámicas.
+// también afuera, de día o de noche, aunque la escena no tenga luces dinámicas. Una escena con su
+// propio sol fijo (la cresta) define AV_SUN con su dirección, y los avatares se iluminan con ese.
 
 import type { V3 } from "./camera"
 import type { Program } from "./shader"
@@ -642,7 +643,11 @@ vec3 avatarShade(vec3 p, vec3 n, vec3 rd, float m) {
   if (part > 4.5) base = vec3(0.1, 0.08, 0.09);
   if (part > 5.5) base = vec3(0.9, 0.9, 0.93);
   vec3 L = avatarLight(p, n);
+#ifdef AV_SUN
+  L += vec3(1.0, 0.95, 0.85) * max(dot(n, AV_SUN), 0.0) * 0.8;
+#else
   L += uLightCol * max(dot(n, uSunDir), 0.0) * uLight * 0.8;
+#endif
   L += mix(uSkyHor, uSkyTop, n.y * 0.5 + 0.5) * 0.35;
   float rim = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
   // Lo oscuro (la tela negra del demonio) se dibuja sobre todo por el borde: ahí el brillo pesa más

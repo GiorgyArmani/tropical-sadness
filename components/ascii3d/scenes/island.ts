@@ -243,5 +243,6 @@ export const ISLAND: Scene3D = {
   saturation: 0.95,
   grade: 0.2,
   outdoor: true,
+  weather: true,
   camera: { target: [0, 1, 0], yaw: 0.15, pitch: 0.18, frame: 6.5, clip: 40, pitchRange: [0.02, 1.1], exitDoor: { at: [2.1, 1.25, 1.3], facing: [-0.6, 0, 0.8] } },
 }

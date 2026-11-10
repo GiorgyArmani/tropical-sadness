@@ -25,10 +25,11 @@ export type Scene3D = {
   id: string
   name: string // corto, para el botón de salida
   label: string // con artículo, para lectores de pantalla
-  blurb: string // idea de la escena en una línea; no se muestra, queda como referencia
+  blurb: string // idea de la escena en una línea; se lee en la barra de estado del navegador
   glsl: string
   exposure?: number // cuánta luz recibe el ASCII (1 por defecto)
-  outdoor?: boolean // al aire libre: le llueve encima
+  outdoor?: boolean // al aire libre: le llueve encima (si tiene clima)
+  weather?: boolean // el clima real de la ubicación (nubes, lluvia, niebla, tormenta): solo la isla y el cementerio
   saturation?: number // cuánto color pasa al ASCII (0 gris, 1 todo; 0.5 por defecto)
   grade?: number // cuánto se tiñe con la paleta de la isla (0.45 por defecto)
   detail?: AsciiDetail // "fine" (por defecto): más escalones de luz y trazos donde la luz cambia; "classic": como antes

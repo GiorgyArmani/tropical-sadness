@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react"
 import type { RealtimeChannel } from "@supabase/supabase-js"
+import { SAY_EVENT } from "./ascii3d/bubbles"
+import OsIcon from "./OsIcon"
 import PixelIcon from "./PixelIcon"
 import { getClient } from "./supabase"
 
@@ -243,67 +245,73 @@ export default function ChatRoom({
       return
     }
     setMessages((prev) => merge(prev, [toMsg(data as Row)]).slice(-MAX_SHOWN))
+    // Si se está en una sala del 3D, lo dicho aparece un rato sobre el avatar (ascii3d/bubbles.ts)
+    window.dispatchEvent(new CustomEvent(SAY_EVENT, { detail: body }))
   }
 
-  const wait = Math.max(0, Math.ceil((cooldownUntil - now) / 1000))
+  const wait =Math.max(0, Math.ceil((cooldownUntil - now) / 1000))
 
   return (
     <>
       {openProp === undefined && <ChatToggle open={open} onClick={() => setOpen((o) => !o)} className="fixed bottom-[3.9rem] right-3 z-40 sm:bottom-[4.5rem] sm:right-8 lg:bottom-5" />}
 
+      {/* Una ventana del sistema, suelta sobre la página (va adentro del recuadro del navegador) */}
       {open && (
         <section
           id="ts-chat"
           aria-label="Chat"
-          className="ts-px-panel fixed inset-x-3 bottom-[6rem] z-40 flex h-[min(50dvh,22rem)] flex-col font-mono text-[11px] text-white sm:left-auto sm:right-8 sm:bottom-[6.75rem] sm:w-80 lg:bottom-[7.5rem] lg:left-[calc(50%+7rem)] lg:right-auto"
+          className="ts-win ts-win--float ts-os absolute inset-x-2 bottom-14 z-30 flex h-[min(50dvh,22rem)] max-h-[calc(100%-4rem)] flex-col sm:bottom-3 sm:left-auto sm:right-3 sm:max-h-[calc(100%-1.5rem)] sm:w-80"
         >
-          <header className="flex items-center justify-between border-b border-dotted border-white/50 px-2.5 py-1.5">
-            <p className="font-bold tracking-wide">
-              <span className="text-[#5cff8a]">&gt;</span> chat
-            </p>
-            <button type="button" onClick={() => setOpen(false)} aria-label="Cerrar chat" className="ts-px-btn h-5 w-5">
+          <header className="ts-win-title ts-bold">
+            <OsIcon name="chat" />
+            <p className="min-w-0 flex-1 truncate">chat</p>
+            <button type="button" onClick={() => setOpen(false)} aria-label="Cerrar chat" className="ts-win-ctl">
               <PixelIcon name="close" className="h-2 w-2" />
             </button>
           </header>
 
           {status === "error" ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 px-3 text-center">
-              <p className="text-white/80">no se pudo conectar.</p>
-              <button type="button" onClick={() => setAttempt((a) => a + 1)} className="ts-px-btn h-6 px-2 uppercase">
+              <p>no se pudo conectar.</p>
+              <button type="button" onClick={() => setAttempt((a) => a + 1)} className="ts-px-btn h-7 px-3">
                 reintentar
               </button>
             </div>
           ) : (
             <>
-              <div ref={listRef} role="log" aria-live="polite" className="flex-1 space-y-1 overflow-y-auto px-2.5 py-2">
-                {hasOlder && (
-                  <button
-                    type="button"
-                    onClick={loadOlder}
-                    disabled={loadingOlder}
-                    className="mb-1 block w-full text-center text-[10px] uppercase tracking-[0.15em] text-white/45 hover:text-white/80 disabled:opacity-40"
-                  >
-                    {loadingOlder ? "cargando…" : "ver anteriores"}
-                  </button>
-                )}
-                {status === "connecting" && messages.length === 0 && <p className="text-white/45">conectando…</p>}
-                {status === "online" && messages.length === 0 && <p className="text-white/45">todavía nadie ha escrito. empieza tú…</p>}
-                {messages.map((m) => (
-                  <p key={m.id} className="break-words leading-snug">
-                    <span className="float-right ml-2 text-[9px] tabular-nums text-white/30">{when(m.at)}</span>
-                    <span className="font-bold" style={{ color: colorOf(m.nick) }}>
-                      {m.nick}
-                    </span>
-                    <span className="text-white/40">: </span>
-                    {m.text}
-                  </p>
-                ))}
+              <div className="ts-well mt-[3px] flex min-h-0 flex-1 flex-col bg-[#07060f]">
+                <div
+                  ref={listRef}
+                  role="log"
+                  aria-live="polite"
+                  className="ts-scroll flex-1 space-y-1 overflow-y-auto px-2 py-1.5 font-mono text-[11px] text-white antialiased"
+                >
+                  {hasOlder && (
+                    <button
+                      type="button"
+                      onClick={loadOlder}
+                      disabled={loadingOlder}
+                      className="mb-1 block w-full text-center text-[10px] uppercase tracking-[0.15em] text-white/45 hover:text-white/80 disabled:opacity-40"
+                    >
+                      {loadingOlder ? "cargando…" : "ver anteriores"}
+                    </button>
+                  )}
+                  {status === "connecting" && messages.length === 0 && <p className="text-white/45">conectando…</p>}
+                  {status === "online" && messages.length === 0 && <p className="text-white/45">todavía nadie ha escrito. empieza tú…</p>}
+                  {messages.map((m) => (
+                    <p key={m.id} className="break-words leading-snug">
+                      <span className="float-right ml-2 text-[9px] tabular-nums text-white/30">{when(m.at)}</span>
+                      <span className="font-bold" style={{ color: colorOf(m.nick) }}>
+                        {m.nick}
+                      </span>
+                      <span className="text-white/40">: </span>
+                      {m.text}
+                    </p>
+                  ))}
+                </div>
               </div>
-              {notice && <p className="border-t border-dotted border-white/30 px-2.5 py-1 text-[10px] text-[#ff9a3c]">{notice}</p>}
-              <form onSubmit={send} className="flex items-center gap-2 border-t border-dotted border-white/50 px-2.5 py-1.5">
-                <span className="text-[#5cff8a]" aria-hidden="true">
-                  &gt;
-                </span>
+              {notice && <p className="px-1 pt-1.5 leading-tight">{notice}</p>}
+              <form onSubmit={send} className="flex items-center gap-1 pt-[3px]">
                 <input
                   ref={inputRef}
                   value={text}
@@ -313,13 +321,13 @@ export default function ChatRoom({
                   disabled={status !== "online"}
                   aria-label={`Mensaje como ${nick}`}
                   placeholder={wait ? `modo lento · ${wait}s` : `${nick}…`}
-                  className="min-w-0 flex-1 bg-transparent py-1 text-base text-white placeholder-white/30 outline-none disabled:opacity-40 sm:text-[11px]"
+                  className="ts-field h-7 min-w-0 flex-1 disabled:bg-[var(--os-face)]"
                 />
                 <button
                   type="submit"
                   disabled={!text.trim() || status !== "online" || wait > 0}
                   aria-label={wait ? `Modo lento, espera ${wait} segundos` : "Enviar"}
-                  className="ts-px-btn ts-px-btn--primary h-6 min-w-6 px-1 tabular-nums disabled:opacity-40"
+                  className="ts-px-btn ts-px-btn--primary h-7 min-w-7 px-1 tabular-nums"
                 >
                   {wait ? wait : <PixelIcon name="right" className="h-2.5 w-2.5" />}
                 </button>
@@ -332,18 +340,19 @@ export default function ChatRoom({
   )
 }
 
-// El botón que abre y cierra el chat
+// El botón que abre y cierra el chat: va en la barra de tareas y queda hundido con la ventana abierta
 export function ChatToggle({ open, onClick, className = "" }: { open: boolean; onClick: () => void; className?: string }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      aria-label="Chat"
       aria-expanded={open}
       aria-controls="ts-chat"
-      className={`ts-px-btn h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em] ${className}`}
+      className={`ts-px-btn ts-os h-7 gap-1.5 px-1.5 ${open ? "ts-px-btn--on" : ""} ${className}`}
     >
-      <PixelIcon name="chat" className="h-2.5 w-2.5" />
-      chat
+      <OsIcon name="chat" />
+      <span className="hidden sm:inline">chat</span>
     </button>
   )
 }

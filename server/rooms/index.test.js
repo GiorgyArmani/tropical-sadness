@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import WebSocket from "ws"
 
 process.env.ALLOWED_ORIGINS = "https://ejemplo.test"
-const { start, cleanNick, cleanPos, cleanLook, ROOM_MAX } = await import("./index.js")
+const { start, cleanNick, cleanPos, cleanLook, cleanSay, ROOM_MAX } = await import("./index.js")
 const PORT = 18080
 const URL = `ws://127.0.0.1:${PORT}`
 
@@ -60,6 +60,26 @@ test("salas", async (t) => {
     b.ws.close()
   })
 
+  await t.test("lo que se escribe en el chat llega a los demás de la sala", async () => {
+    const a = await client()
+    const b = await client()
+    a.send({ t: "hi", scene: "cresta", nick: "ana" })
+    const wa = await a.next((m) => m.t === "welcome")
+    b.send({ t: "hi", scene: "cresta", nick: "beto" })
+    await b.next((m) => m.t === "welcome")
+    a.send({ t: "say", text: "antes de aparecer" }) // sin posición todavía: nadie lo ve, no se reparte
+    a.send({ t: "p", x: 0, y: 5, z: -9, yaw: 0, walk: 0, pose: 2 })
+    await b.next((m) => m.t === "join" && m.id === wa.id)
+    a.send({ t: "say", text: "  hola\u0000  mundo  " })
+    const s = await b.next((m) => m.t === "say")
+    assert.deepEqual(s, { t: "say", id: wa.id, text: "hola mundo" })
+    a.send({ t: "say", text: "muy seguido" }) // antes de SAY_MS: se descarta
+    // Ni lo dicho antes de aparecer ni lo muy seguido llegan (next espera 2 s y falla)
+    await assert.rejects(b.next((m) => m.t === "say" && m.text !== "hola mundo"), /no llegó/)
+    a.ws.close()
+    b.ws.close()
+  })
+
   await t.test("una sala llena abre otra", async () => {
     const clients = []
     const rooms = []
@@ -96,4 +116,7 @@ test("limpieza de datos", () => {
   assert.equal(cleanLook({ ...ok, hair: 1.5 }), null)
   assert.equal(cleanLook({ ...ok, glow: "1" }), null)
   assert.equal(cleanLook(null), null)
+  assert.equal(cleanSay("  a\n\tb  "), "a b")
+  assert.equal(cleanSay("x".repeat(300)).length, 200)
+  assert.equal(cleanSay(42), "")
 })

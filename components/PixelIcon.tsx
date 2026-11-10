@@ -1,4 +1,4 @@
-// Íconos pixel-art de 8×8 para los botones estilo videojuego point & click
+// Glifos pixel-art de 8×8 de un solo color (flechas, cerrar, posturas). Los íconos a color son OsIcon
 
 const PATHS = {
   play: "M2 0h2v8H2zM4 1h1v6H4zM5 2h1v4H5zM6 3h1v2H6z",
@@ -11,6 +11,8 @@ const PATHS = {
   down: "M0 2h8v1H0zM1 3h6v1H1zM2 4h4v1H2zM3 5h2v1H3z",
   sound: "M0 3h1v2H0zM1 2h1v4H1zM2 1h2v6H2zM5 2h1v1H5zM5 5h1v1H5zM6 3h1v2H6z",
   mute: "M0 3h1v2H0zM1 2h1v4H1zM2 1h2v6H2zM5 2h1v1H5zM7 2h1v1H7zM6 3h1v2H6zM5 5h1v1H5zM7 5h1v1H7z",
+  min: "M1 5h6v2H1z",
+  max: "M1 1h6v2H1zM1 3h1v4H1zM6 3h1v4H6zM2 6h4v1H2z",
   close: "M1 1h1v1H1zM6 1h1v1H6zM2 2h1v1H2zM5 2h1v1H5zM3 3h2v2H3zM2 5h1v1H2zM5 5h1v1H5zM1 6h1v1H1zM6 6h1v1H6z",
   chat: "M0 1h8v5H0zM1 6h2v1H1zM1 7h1v1H1z",
   turn: "M2 0h4v1H2zM1 1h1v1H1zM6 1h1v1H6zM0 2h1v4H0zM5 2h3v1H5zM6 3h1v1H6zM7 5h1v1H7zM1 6h1v1H1zM6 6h1v1H6zM2 7h4v1H2z",

@@ -1,5 +1,5 @@
 // La conexión con las salas en vivo (server/rooms): manda dónde está uno y trae a los demás de la
-// misma escena como avatares.
+// misma escena como avatares. También lleva lo que cada uno escribe en el chat (sus burbujas).
 //
 // Cuida la batería y el servidor: solo se conecta en una escena con avatares, con la pestaña visible;
 // manda la posición hasta 5 veces por segundo y solo si cambió. Si se corta, reintenta cada vez más
@@ -7,12 +7,13 @@
 
 import { STRIDE, cleanLook, lookOf, type Avatar, type Look } from "./engine/avatars"
 import type { V3 } from "./engine/camera"
+import { SAY_MAX, type Said } from "./bubbles"
 
 const SEND_MS = 200
 const FOLLOW = 10 // qué tan rápido el avatar alcanza la última posición recibida (por segundo)
 const RETRY_MS = [1000, 3000, 8000, 20000, 30000]
 
-type Remote = Avatar & { id: number; nick: string; target: V3; targetYaw: number; targetWalk: number; pose: number }
+type Remote = Avatar & { id: number; nick: string; target: V3; targetYaw: number; targetWalk: number; pose: number; say?: Said }
 // walk: 0 quieto, 1 caminando, 2 corriendo; pose: 0 de pie, 1 agachado, 2 sentado
 export type Pose = { x: number; y: number; z: number; yaw: number; walk: number; pose: number }
 
@@ -74,6 +75,10 @@ export const createRoomLink = (url: string) => {
         o.targetWalk = walk
         o.pose = pose ?? 0 // un servidor viejo no la manda
       }
+    } else if (m.t === "say") {
+      // Alguien de la sala escribió en el chat: se ve un rato sobre su avatar
+      const o = others.get(m.id)
+      if (o && typeof m.text === "string" && m.text) o.say = { text: m.text.slice(0, SAY_MAX), at: performance.now() }
     }
   }
 
@@ -140,8 +145,13 @@ export const createRoomLink = (url: string) => {
       lastSend = now
       ws.send(JSON.stringify(msg))
     },
+    // Lo que uno escribió en el chat, para que los demás de la sala lo vean sobre su avatar
+    say(text: string) {
+      if (ws?.readyState !== WebSocket.OPEN || !joined) return
+      ws.send(JSON.stringify({ t: "say", text: text.slice(0, SAY_MAX) }))
+    },
     // Los demás, suavizados hasta este cuadro (dt en segundos)
-    avatars(dt: number): (Avatar & { nick: string })[] {
+    avatars(dt: number): (Avatar & { nick: string; say?: Said })[] {
       const k = 1 - Math.exp(-FOLLOW * dt)
       for (const o of others.values()) {
         const dx = o.target[0] - o.pos[0]

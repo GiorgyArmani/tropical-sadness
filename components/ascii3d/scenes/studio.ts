@@ -219,7 +219,7 @@ export const STUDIO: Scene3D = {
   id: "estudio",
   name: "estudio",
   label: "el estudio",
-  blurb: "espacio 08 · un sampler sobre la mesa; acá la radio se calla y tocas tú",
+  blurb: "espacio 08 · un sampler sobre la mesa; aquí la radio se calla y tocas tú",
   glsl: studio,
   lights: studioLights,
   exposure: 1.7,

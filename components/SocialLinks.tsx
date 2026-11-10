@@ -1,44 +1,43 @@
-// Recuadro de redes al estilo de las colecciones de arte ASCII: borde, título y lista con ">"
+import OsIcon, { type OsIconName } from "./OsIcon"
 
-const LINKS = [
-  { label: "bandcamp", href: "https://tropicalsadness.bandcamp.com", featured: true },
-  { label: "instagram", href: "https://www.instagram.com/tropical.sadness.crew/" },
-  { label: "soundcloud", href: "https://soundcloud.com/tropicalsadness" },
-  { label: "facebook", href: "https://www.facebook.com/tropicalsadness" },
-  { label: "vk", href: "https://vk.ru/tropicalsadness" },
-  { label: "youtube", href: "https://www.youtube.com/channel/UCGipiTbdHIXTjG8QdsEPIwQ" },
+// Las redes son la barra de vínculos del navegador: siempre a la vista, debajo de la dirección.
+// En el celular no entran todas: la fila se desliza hacia los costados (lo avisa el » del final).
+
+const LINKS: { label: string; href: string; icon: OsIconName; featured?: boolean }[] = [
+  { label: "bandcamp", href: "https://tropicalsadness.bandcamp.com", icon: "cassette", featured: true },
+  { label: "instagram", href: "https://www.instagram.com/tropical.sadness.crew/", icon: "camera" },
+  { label: "soundcloud", href: "https://soundcloud.com/tropicalsadness", icon: "cloud" },
+  { label: "facebook", href: "https://www.facebook.com/tropicalsadness", icon: "face" },
+  { label: "vk", href: "https://vk.ru/tropicalsadness", icon: "doll" },
+  { label: "youtube", href: "https://www.youtube.com/channel/UCGipiTbdHIXTjG8QdsEPIwQ", icon: "tv" },
 ]
 
 export default function SocialLinks({ className = "" }: { className?: string }) {
   return (
-    <nav
-      aria-label="Redes de Tropical Sadness"
-      className={`ts-px-panel w-fit px-2.5 py-1.5 font-mono text-[11px] text-white sm:min-w-40 sm:px-3 sm:py-2.5 sm:text-xs ${className}`}
-    >
-      <p className="hidden border-b border-dotted border-white/60 pb-1.5 text-center font-bold tracking-wide sm:block">redes</p>
-      <ul className="flex max-w-[22rem] flex-wrap justify-center gap-x-2.5 gap-y-0.5 sm:mt-2 sm:max-w-none sm:flex-col sm:gap-y-1.5">
+    <nav aria-label="Redes de Tropical Sadness" className={`flex items-center gap-1 ${className}`}>
+      <p aria-hidden="true" className="hidden shrink-0 px-1 sm:block">
+        vínculos
+      </p>
+      {/* relative: los textos para lectores de pantalla quedan adentro de la fila que se desliza */}
+      <ul className="relative flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {LINKS.map((link) => (
-          <li key={link.label}>
-            <span className="text-white/60" aria-hidden="true">
-              &gt;{" "}
-            </span>
+          <li key={link.label} className="shrink-0">
             <a
               href={link.href}
               target="_blank"
               rel="noopener noreferrer"
-              className={`cursor-pointer underline underline-offset-2 transition-colors duration-200 hover:text-[#FFD600] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FFD600] focus-visible:ring-offset-2 focus-visible:ring-offset-black ${
-                link.featured ? "font-bold text-[#FFD600]" : "text-[#5cff8a]"
-              }`}
+              className={`ts-link ${link.featured ? "ts-link--featured ts-bold" : ""}`}
             >
+              <OsIcon name={link.icon} />
               {link.label}
               <span className="sr-only"> (se abre en una pestaña nueva)</span>
             </a>
-            <span className="text-white/60" aria-hidden="true">
-              ;
-            </span>
           </li>
         ))}
       </ul>
+      <span aria-hidden="true" className="shrink-0 px-0.5 sm:hidden">
+        »
+      </span>
     </nav>
   )
 }

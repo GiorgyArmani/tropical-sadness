@@ -1,5 +1,6 @@
 // Cielo y clima en vivo para el 3D: la misma hora y el mismo clima real que la isla 2D
-// (Open-Meteo vía /api/clima), con ?hora= y ?clima= para previsualizar.
+// (Open-Meteo vía /api/clima), con ?hora= y ?clima= para previsualizar. El clima es solo para las
+// escenas que lo piden (Scene3D.weather: la isla y el cementerio); las demás tienen el cielo despejado.
 
 import { clamp, mixRGB, type RGB } from "../ascii/math"
 import {
@@ -64,12 +65,14 @@ export const createLiveSky = () => {
     timer = setInterval(fetchClima, 15 * 60 * 1000)
   }
 
-  const read = (now: number, t: number): LiveSky => {
+  // weather = false: la escena no tiene clima (solo la isla y el cementerio lo tienen): cielo despejado,
+  // con la hora real igual. El clima real se sigue calculando, así al volver a la isla sigue donde iba
+  const read = (now: number, t: number, weather = true): LiveSky => {
     const real = localHour(forcedHour)
     const hour = sun && forcedHour === null ? canonHour(real, sun.sunrise, sun.sunset) : real
-    const wea =
+    lastWea =
       forcedWeather ?? (live ? lerpWeather(live.from, live.to, clamp((now - live.at) / (WEATHER_FADE * 1000), 0, 1)) : cycleWeather())
-    lastWea = wea
+    const wea = weather ? lastWea : WEATHERS.despejado
     const base = skyAt(hour)
     // Relámpagos de tormenta, unos pocos por minuto
     const slot = Math.floor(t * 4)

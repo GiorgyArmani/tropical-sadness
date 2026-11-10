@@ -201,6 +201,7 @@ export const CEMETERY: Scene3D = {
   saturation: 0.85,
   grade: 0.25,
   outdoor: true,
+  weather: true,
   camera: {
     target: [0, 0.9, -0.3],
     yaw: 0.1,

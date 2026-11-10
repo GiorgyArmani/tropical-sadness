@@ -140,6 +140,7 @@
   50% { transform: translateY(-10px); }
 }
 
+/* Deslizador de volumen de la bandeja: ranura hundida y perilla gris con bisel */
 .ts-range {
   -webkit-appearance: none;
   appearance: none;
@@ -148,43 +149,508 @@
   cursor: pointer;
 }
 .ts-range::-webkit-slider-runnable-track {
-  height: 3px;
-  background: linear-gradient(to right, #ffd600 var(--fill, 0%), rgba(255, 255, 255, 0.3) var(--fill, 0%));
+  height: 4px;
+  background: var(--os-dark);
+  box-shadow: inset 1px 1px 0 var(--os-shadow), 1px 1px 0 var(--os-hilite);
 }
 .ts-range::-moz-range-track {
-  height: 3px;
-  background: rgba(255, 255, 255, 0.3);
-}
-.ts-range::-moz-range-progress {
-  height: 3px;
-  background: #ffd600;
+  height: 4px;
+  background: var(--os-dark);
+  box-shadow: inset 1px 1px 0 var(--os-shadow), 1px 1px 0 var(--os-hilite);
 }
 .ts-range::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 11px;
-  height: 11px;
-  margin-top: -4px;
+  width: 10px;
+  height: 20px;
+  margin-top: -8px;
   border-radius: 0;
-  background: #ffd600;
-  opacity: 1;
-  transition: opacity 150ms ease-out;
+  background: var(--os-face);
+  box-shadow: var(--os-raised);
 }
 .ts-range::-moz-range-thumb {
-  width: 11px;
-  height: 11px;
+  width: 10px;
+  height: 20px;
   border: 0;
   border-radius: 0;
-  background: #ffd600;
-  opacity: 1;
-  transition: opacity 150ms ease-out;
+  background: var(--os-face);
+  box-shadow: var(--os-raised);
 }
-.ts-range:hover::-webkit-slider-thumb,
-.ts-range:focus-visible::-webkit-slider-thumb { opacity: 1; }
-.ts-range:hover::-moz-range-thumb,
-.ts-range:focus-visible::-moz-range-thumb { opacity: 1; }
 .ts-range:focus-visible {
-  outline: 1px solid rgba(255, 255, 255, 0.5);
+  outline: 1px dotted var(--os-text);
   outline-offset: 2px;
+}
+
+/* ── tropi.OS ─────────────────────────────────────────────────
+   La interfaz es un Windows 95 pasado por vaporwave: ventanas grises (apenas lavanda) con bisel,
+   barras de título en degradé índigo → rosa y una sola letra de mapa de bits, siempre a 16 px (su
+   tamaño nativo). Lo que es "la página" (el arte ASCII, el registro del chat) sigue negro con neón,
+   adentro de esos marcos. */
+:root {
+  --os-face: #c9c5d6;
+  --os-light: #e4e1ee;
+  --os-hilite: #ffffff;
+  --os-shadow: #827d99;
+  --os-dark: #17122b;
+  --os-text: #14101f;
+  --os-title: linear-gradient(90deg, #2a1670, #8a2bb0 55%, #e8479f);
+  --os-raised:
+    inset -1px -1px 0 var(--os-dark), inset 1px 1px 0 var(--os-hilite), inset -2px -2px 0 var(--os-shadow),
+    inset 2px 2px 0 var(--os-light);
+  --os-sunken:
+    inset -1px -1px 0 var(--os-hilite), inset 1px 1px 0 var(--os-shadow), inset -2px -2px 0 var(--os-light),
+    inset 2px 2px 0 var(--os-dark);
+  --os-pressed: inset -1px -1px 0 var(--os-hilite), inset 1px 1px 0 var(--os-dark), inset 2px 2px 0 var(--os-shadow);
+}
+
+/* Pantallas bajas (celular acostado): la interfaz se achica para dejarle lugar a la página */
+@custom-variant short (@media (max-height: 480px));
+
+@layer components {
+  /* Texto del sistema */
+  .ts-os {
+    font-family: var(--font-dot), "MS Gothic", ui-monospace, monospace;
+    font-size: 16px;
+    line-height: 1;
+    letter-spacing: 0;
+    color: var(--os-text);
+    -webkit-font-smoothing: none;
+  }
+  /* Negrita de mapa de bits: la letra repetida un píxel al costado */
+  .ts-bold {
+    text-shadow: 1px 0 0 currentColor;
+    letter-spacing: 1px;
+  }
+
+  /* Ventana y su barra de título */
+  .ts-win {
+    padding: 3px;
+    background: var(--os-face);
+    box-shadow:
+      inset -1px -1px 0 var(--os-dark),
+      inset 1px 1px 0 var(--os-light),
+      inset -2px -2px 0 var(--os-shadow),
+      inset 2px 2px 0 var(--os-hilite);
+  }
+  /* Ventana suelta sobre la página: además, sombra dura */
+  .ts-win--float {
+    box-shadow:
+      inset -1px -1px 0 var(--os-dark),
+      inset 1px 1px 0 var(--os-light),
+      inset -2px -2px 0 var(--os-shadow),
+      inset 2px 2px 0 var(--os-hilite),
+      4px 4px 0 rgba(0, 0, 0, 0.5);
+  }
+  .ts-win-title {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 6px;
+    height: 22px;
+    padding: 0 3px 0 4px;
+    background: var(--os-title);
+    color: #fff;
+  }
+  /* Botones de la barra de título (minimizar, maximizar, cerrar) */
+  .ts-win-ctl {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 16px;
+    background: var(--os-face);
+    color: var(--os-text);
+    box-shadow: var(--os-raised);
+  }
+  button.ts-win-ctl::after {
+    content: "";
+    position: absolute;
+    inset: -8px;
+  }
+  button.ts-win-ctl:active {
+    box-shadow: var(--os-pressed);
+  }
+  button.ts-win-ctl:focus-visible {
+    outline: 1px dotted #fff;
+    outline-offset: 2px;
+  }
+
+  /* Recuadro hundido (la página del navegador, el registro del chat) y su versión fina (barra de
+     estado, bandeja) */
+  .ts-well {
+    padding: 2px;
+    box-shadow: var(--os-sunken);
+  }
+  .ts-inset {
+    box-shadow:
+      inset 1px 1px 0 var(--os-shadow),
+      inset -1px -1px 0 var(--os-hilite);
+  }
+  /* Campo de texto */
+  .ts-field {
+    height: 24px;
+    padding: 0 6px;
+    background: #fff;
+    color: var(--os-text);
+    box-shadow: var(--os-sunken);
+    outline: none;
+  }
+  .ts-field::placeholder {
+    color: var(--os-shadow);
+  }
+  .ts-field:focus-visible,
+  .ts-field:has(input:focus-visible) {
+    outline: 1px dotted var(--os-text);
+    outline-offset: 1px;
+  }
+  /* Visor de la radio: cristal negro con letras verdes */
+  .ts-lcd {
+    background: #07060f;
+    color: #5cff8a;
+    box-shadow: var(--os-sunken);
+  }
+
+  /* Botón plano de la barra de vínculos: el bisel aparece al pasar por encima */
+  .ts-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 6px 0 4px;
+    white-space: nowrap;
+    color: var(--os-text);
+  }
+  .ts-link:hover {
+    box-shadow:
+      inset -1px -1px 0 var(--os-shadow),
+      inset 1px 1px 0 var(--os-hilite);
+  }
+  .ts-link:active {
+    box-shadow:
+      inset 1px 1px 0 var(--os-shadow),
+      inset -1px -1px 0 var(--os-hilite);
+  }
+  .ts-link:focus-visible {
+    outline: 1px dotted var(--os-text);
+    outline-offset: -3px;
+  }
+  .ts-link--featured {
+    background: #ffd600;
+    box-shadow:
+      inset -1px -1px 0 #a88a00,
+      inset 1px 1px 0 #fffbe0;
+  }
+  .ts-link--featured:hover {
+    box-shadow:
+      inset -1px -1px 0 #000,
+      inset 1px 1px 0 #fffbe0;
+  }
+
+  /* Barra de tareas */
+  .ts-taskbar {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 3px calc(2px + env(safe-area-inset-bottom));
+    background: var(--os-face);
+    box-shadow:
+      inset 0 1px 0 var(--os-light),
+      inset 0 2px 0 var(--os-hilite);
+  }
+
+  /* Fondo de las ventanas que piden algo antes de seguir: la pantalla tramada del "Apagar el sistema" */
+  .ts-dither {
+    background: repeating-conic-gradient(rgba(0, 0, 0, 0.92) 0 25%, rgba(0, 0, 0, 0.45) 0 50%) 0 0 / 2px 2px;
+  }
+}
+
+/* Barra de desplazamiento de Windows, donde hay mouse (en el celular queda la del sistema) */
+@media (pointer: fine) {
+  .ts-scroll::-webkit-scrollbar {
+    width: 16px;
+  }
+  .ts-scroll::-webkit-scrollbar-track {
+    background: repeating-conic-gradient(var(--os-hilite) 0 25%, var(--os-face) 0 50%) 0 0 / 2px 2px;
+  }
+  .ts-scroll::-webkit-scrollbar-thumb {
+    background: var(--os-face);
+    box-shadow: var(--os-raised);
+  }
+  .ts-scroll::-webkit-scrollbar-button:single-button {
+    display: block;
+    height: 16px;
+    background: var(--os-face) center / 8px 8px no-repeat;
+    box-shadow: var(--os-raised);
+  }
+  .ts-scroll::-webkit-scrollbar-button:single-button:vertical:decrement {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath d='M0 5h8v1H0zM1 4h6v1H1zM2 3h4v1H2zM3 2h2v1H3z'/%3E%3C/svg%3E");
+  }
+  .ts-scroll::-webkit-scrollbar-button:single-button:vertical:increment {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath d='M0 2h8v1H0zM1 3h6v1H1zM2 4h4v1H2zM3 5h2v1H3z'/%3E%3C/svg%3E");
+  }
+}
+
+/* ── Arranque de tropi.OS (components/BootScreen) ─────────────
+   Un monitor de tubo. Está apagado hasta que se lo enciende (ese toque es también el que deja sonar
+   el audio). Al encender, la imagen se abre desde una línea, pasa el chequeo del BIOS, el logo se
+   dibuja renglón por renglón y aparece el nombre del sistema. Toda la secuencia la lleva el CSS desde
+   .ts-boot--on; los tiempos del sonido (components/bootSound.ts) van calzados con estos. */
+.ts-boot {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  overflow: hidden;
+  background: #020104;
+}
+.ts-boot--on {
+  animation: ts-boot-life 4.7s steps(4) forwards;
+}
+@keyframes ts-boot-life {
+  0%, 93% { opacity: 1; visibility: visible; }
+  100% { opacity: 0; visibility: hidden; }
+}
+@keyframes ts-boot-on {
+  to { opacity: 1; }
+}
+@keyframes ts-boot-off {
+  to { opacity: 0; }
+}
+@keyframes ts-boot-blink {
+  50% { opacity: 0.3; }
+}
+
+/* Apagado: el vidrio a oscuras, con un reflejo, y el botón de encendido */
+.ts-boot-power {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: radial-gradient(ellipse at 28% 18%, rgba(190, 180, 255, 0.07), transparent 46%);
+  color: #a9a4c4;
+  cursor: pointer;
+}
+.ts-boot-power span {
+  animation: ts-boot-blink 1.4s steps(2, jump-none) infinite;
+}
+.ts-boot-power:focus-visible {
+  outline: 1px dotted #a9a4c4;
+  outline-offset: -8px;
+}
+
+/* El tubo: la imagen. Al encender se abre desde una línea brillante y después titila apenas */
+.ts-boot-tube {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 22px / 28px;
+  background: #05030d;
+  visibility: hidden;
+}
+.ts-boot--on .ts-boot-tube {
+  visibility: visible;
+  animation:
+    ts-crt-on 0.5s cubic-bezier(0.2, 0.8, 0.3, 1) 0.08s backwards,
+    ts-crt-flicker 0.15s steps(1) 0.6s infinite;
+}
+@keyframes ts-crt-on {
+  0% { transform: scale(0.3, 0.004); filter: brightness(5); }
+  35% { transform: scale(1, 0.004); filter: brightness(5); }
+  75% { transform: scale(1, 1); filter: brightness(1.8); }
+  100% { transform: none; filter: none; }
+}
+@keyframes ts-crt-flicker {
+  0% { opacity: 1; }
+  20% { opacity: 0.965; }
+  40% { opacity: 0.99; }
+  60% { opacity: 0.955; }
+  80% { opacity: 0.985; }
+}
+/* El fogonazo blanco del encendido */
+.ts-boot-tube::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: #efeaff;
+  opacity: 0;
+  pointer-events: none;
+}
+.ts-boot--on .ts-boot-tube::after {
+  animation: ts-crt-flash 0.62s ease-out 0.08s backwards;
+}
+@keyframes ts-crt-flash {
+  0%, 35% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* El vidrio, encima de todo: líneas de barrido, la trama de fósforo rojo-verde-azul, los bordes
+   oscurecidos y una franja clara que baja (el refresco de pantalla) */
+.ts-crt {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0) 0 2px, rgba(0, 0, 0, 0.32) 2px 3px),
+    repeating-linear-gradient(90deg, rgba(255, 0, 60, 0.06) 0 1px, rgba(0, 255, 120, 0.04) 1px 2px, rgba(40, 80, 255, 0.06) 2px 3px),
+    radial-gradient(ellipse at 50% 50%, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.62) 100%);
+  box-shadow: inset 0 0 70px rgba(0, 0, 0, 0.75);
+}
+.ts-crt::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 22%;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.05) 50%, rgba(255, 255, 255, 0));
+  transform: translateY(-100%);
+}
+.ts-boot--on .ts-crt::before {
+  animation: ts-crt-roll 3.2s linear 0.6s infinite;
+}
+@keyframes ts-crt-roll {
+  to { transform: translateY(460%); }
+}
+
+/* Chequeo del BIOS: letras con brillo de fósforo y los colores apenas corridos */
+.ts-boot-post {
+  position: absolute;
+  inset: clamp(18px, 3vw, 28px);
+  line-height: 1.5;
+  color: #fff;
+  text-shadow:
+    1px 0 0 rgba(255, 40, 90, 0.6),
+    -1px 0 0 rgba(40, 220, 255, 0.6),
+    0 0 8px rgba(215, 205, 255, 0.85);
+}
+.ts-boot--on .ts-boot-post {
+  animation: ts-boot-off 0s 2s forwards;
+}
+.ts-boot-post p {
+  opacity: 0;
+}
+.ts-boot--on .ts-boot-post p {
+  animation: ts-boot-on 0s forwards;
+  animation-delay: calc(0.62s + var(--i) * 0.24s);
+}
+.ts-boot-cursor {
+  animation: ts-boot-blink 0.5s steps(2, jump-none) infinite;
+}
+
+.ts-boot-splash {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  background: radial-gradient(ellipse at 50% 42%, #2a1670 0%, #0d0824 55%, #05030d 100%);
+  opacity: 0;
+}
+.ts-boot--on .ts-boot-splash {
+  animation: ts-boot-on 0s 2s forwards;
+}
+.ts-boot-logo {
+  width: min(52vw, 34vh, 240px);
+  height: auto;
+  clip-path: inset(0 0 100% 0);
+  filter: drop-shadow(0 0 12px rgba(46, 242, 196, 0.4));
+}
+.ts-boot--on .ts-boot-logo {
+  animation:
+    ts-boot-scan 0.9s steps(18) 2.05s forwards,
+    ts-boot-glitch 0.4s steps(1) 2.95s;
+}
+@keyframes ts-boot-scan {
+  to { clip-path: inset(0 0 0 0); }
+}
+@keyframes ts-boot-glitch {
+  0% { transform: translate(-7px, 0) skewX(-9deg); filter: hue-rotate(90deg); }
+  25% { transform: translate(5px, -2px); filter: hue-rotate(-70deg) saturate(2); }
+  50% { transform: translate(-2px, 1px) skewX(4deg); filter: none; }
+  75% { transform: translate(3px, 0); filter: hue-rotate(40deg); }
+  100% { transform: none; }
+}
+.ts-boot-name {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 32px;
+  color: #fff;
+  text-shadow:
+    2px 0 0 rgba(255, 40, 90, 0.55),
+    -2px 0 0 rgba(40, 220, 255, 0.55),
+    0 0 14px rgba(255, 255, 255, 0.5);
+  opacity: 0;
+}
+.ts-boot--on .ts-boot-name {
+  animation: ts-boot-on 0s 2.95s forwards;
+}
+/* La franja que corre abajo mientras carga */
+.ts-boot-bar {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 10px;
+  background: linear-gradient(90deg, #2a1670, #e8479f, #ffd600, #2ef2c4, #2a1670) 0 0 / 50% 100% repeat-x;
+  animation: ts-boot-bar 1.4s steps(28) infinite;
+}
+@keyframes ts-boot-bar {
+  to { background-position: 100% 0; }
+}
+/* Apagado (la X de la ventana): la página entera se aplasta en una línea y después en un punto, que
+   queda brillando un instante en el vidrio ya negro */
+.ts-boot--closing {
+  background: transparent;
+  animation: ts-boot-closing 1.25s steps(1) forwards;
+}
+@keyframes ts-boot-closing {
+  58%, 100% { background: #020104; }
+}
+body.ts-power-off main {
+  animation: ts-crt-off 0.45s cubic-bezier(0.5, 0, 0.9, 0.5) 0.25s forwards;
+}
+@keyframes ts-crt-off {
+  60% { transform: scale(1, 0.004); filter: brightness(4); }
+  100% { transform: scale(0.002, 0.004); filter: brightness(8); }
+}
+.ts-boot-dot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 18px 6px rgba(220, 215, 255, 0.8);
+  opacity: 0;
+  animation: ts-crt-dot 0.55s ease-out 0.68s;
+}
+@keyframes ts-crt-dot {
+  0% { opacity: 1; transform: scale(1.6); }
+  100% { opacity: 0; transform: scale(0.2); }
+}
+/* Con movimiento reducido: sin fogonazo, titileo ni barrido; se enciende y se ve el logo quieto, y al
+   apagar la pantalla pasa a negro sin aplastarse */
+@media (prefers-reduced-motion: reduce) {
+  .ts-boot--on { animation-duration: 2.6s; }
+  .ts-boot--closing { animation-duration: 0.6s; }
+  body.ts-power-off main { animation: none; }
+  .ts-boot-dot { display: none; }
+  .ts-boot-power span,
+  .ts-boot-bar { animation: none; }
+  .ts-boot--on .ts-boot-tube,
+  .ts-boot--on .ts-boot-tube::after,
+  .ts-boot--on .ts-crt::before { animation: none; }
+  .ts-boot-post { display: none; }
+  .ts-boot--on .ts-boot-splash,
+  .ts-boot--on .ts-boot-name { opacity: 1; animation: none; }
+  .ts-boot--on .ts-boot-logo { clip-path: none; animation: none; }
 }
 
 /* Cursor pixel estilo aventura gráfica: flecha blanca, amarilla sobre lo clickeable */
@@ -197,23 +663,17 @@
 
 /* En la capa components para que las utilidades de Tailwind (fixed, h-6, …) puedan pisarlas */
 @layer components {
-  /* Botón pixel: esquinas recortadas con sombras duras y bisel que se hunde al clickear */
+  /* Botón de Windows 95: gris, con bisel que se hunde al clickear. La letra la pone el contexto
+     (.ts-os en la interfaz del sistema; el sampler conserva la suya) */
   .ts-px-btn {
     position: relative;
     display: inline-flex;
     flex-shrink: 0;
     align-items: center;
     justify-content: center;
-    background: #0d0d0d;
-    color: rgba(255, 255, 255, 0.85);
-    box-shadow:
-      0 -1px 0 0 rgba(255, 255, 255, 0.55),
-      0 1px 0 0 rgba(255, 255, 255, 0.55),
-      -1px 0 0 0 rgba(255, 255, 255, 0.55),
-      1px 0 0 0 rgba(255, 255, 255, 0.55),
-      inset 1px 1px 0 0 rgba(255, 255, 255, 0.18),
-      inset -1px -1px 0 0 rgba(0, 0, 0, 0.8);
-    transition: color 120ms steps(2), background-color 120ms steps(2);
+    background: var(--os-face);
+    color: var(--os-text);
+    box-shadow: var(--os-raised);
   }
   /* Área táctil más grande que el botón visible */
   .ts-px-btn::after {
@@ -221,47 +681,49 @@
     position: absolute;
     inset: -8px;
   }
-  .ts-px-btn:hover {
-    color: #ffd600;
-  }
   .ts-px-btn:active {
     transform: translate(1px, 1px);
-    box-shadow:
-      0 -1px 0 0 rgba(255, 255, 255, 0.55),
-      0 1px 0 0 rgba(255, 255, 255, 0.55),
-      -1px 0 0 0 rgba(255, 255, 255, 0.55),
-      1px 0 0 0 rgba(255, 255, 255, 0.55),
-      inset 1px 1px 0 0 rgba(0, 0, 0, 0.8);
+    box-shadow: var(--os-pressed);
   }
+  /* El foco de Windows: un recuadro punteado por dentro */
   .ts-px-btn:focus-visible {
-    outline: 1px solid #ffd600;
-    outline-offset: 3px;
+    outline: 1px dotted currentColor;
+    outline-offset: -4px;
+  }
+  .ts-px-btn:disabled {
+    color: var(--os-shadow);
+    text-shadow: 1px 1px 0 var(--os-hilite);
+  }
+  .ts-px-btn:disabled svg {
+    opacity: 0.4;
+    filter: grayscale(1);
+  }
+  /* Encendido (ventana abierta, radio al aire, postura activa): queda hundido */
+  .ts-px-btn--on {
+    background: var(--os-light);
+    box-shadow: var(--os-pressed);
   }
   .ts-px-btn--primary {
     background: #ffd600;
     color: #000;
     box-shadow:
-      0 -1px 0 0 #ffd600,
-      0 1px 0 0 #ffd600,
-      -1px 0 0 0 #ffd600,
-      1px 0 0 0 #ffd600,
-      inset 1px 1px 0 0 #fff3a6,
-      inset -1px -1px 0 0 #a88a00;
-  }
-  .ts-px-btn--primary:hover {
-    color: #000;
-    background: #ffe34d;
+      inset -1px -1px 0 #000,
+      inset 1px 1px 0 #fffbe0,
+      inset -2px -2px 0 #a88a00,
+      inset 2px 2px 0 #ffe866;
   }
   .ts-px-btn--primary:active {
     box-shadow:
-      0 -1px 0 0 #ffd600,
-      0 1px 0 0 #ffd600,
-      -1px 0 0 0 #ffd600,
-      1px 0 0 0 #ffd600,
-      inset 1px 1px 0 0 #a88a00;
+      inset 1px 1px 0 #000,
+      inset 2px 2px 0 #a88a00;
+  }
+  /* Apagado, el botón principal vuelve a ser uno gris más */
+  .ts-px-btn--primary:disabled {
+    background: var(--os-face);
+    box-shadow: var(--os-raised);
   }
 
-  /* Panel pixel (barra del player, cartel del clima) */
+  /* Panel pixel oscuro (las hojas del sampler) */
   .ts-px-panel {
     background: rgba(0, 0, 0, 0.82);
     box-shadow:

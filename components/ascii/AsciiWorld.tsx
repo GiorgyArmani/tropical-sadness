@@ -36,16 +36,21 @@ const SKY_RAMP = " .`'-:+*"
 const SWITCH_MS = 900 // estática de tele al cambiar de escena
 const PORTAL_ZOOM = 1.5 // desde este zoom (bien cerca) aparece el botón sobre la entrada de la escena
 
+export type Clima = { label: string; city: string }
+
 // active = false: montado pero en pausa (mientras se ven los espacios 3D), así volver no lo rearma.
 // onPortal: se usó la entrada de la escena (la tele de la isla, la cripta del cementerio)
+// onClima: el clima real de la ubicación, cuando llega (la página lo muestra en la barra de estado)
 export default function AsciiWorld({
   scene,
   active = true,
   onPortal,
+  onClima,
 }: {
   scene: Scene
   active?: boolean
   onPortal?: (sceneId: string) => void
+  onClima?: (clima: Clima) => void
 }) {
   const activeRef = useRef(active)
   const wakeRef = useRef(false)
@@ -63,8 +68,8 @@ export default function AsciiWorld({
   const portalBtnRef = useRef<HTMLButtonElement>(null) // el motor lo pone sobre la entrada y lo muestra de cerca
   const portalRef = useRef<string | null>(null) // la escena cuya entrada está a la vista
   const onPortalRef = useRef(onPortal)
+  const onClimaRef = useRef(onClima)
   const [view, setView] = useState(0)
-  const [clima, setClima] = useState<{ label: string; city: string } | null>(null)
 
   useEffect(() => {
     sceneRef.current = scene
@@ -72,6 +77,9 @@ export default function AsciiWorld({
   useEffect(() => {
     onPortalRef.current = onPortal
   }, [onPortal])
+  useEffect(() => {
+    onClimaRef.current = onClima
+  }, [onClima])
 
   const zoomBy = (k: number) => {
     zoomRef.current = clamp(zoomRef.current * k, ZOOM_MIN, ZOOM_MAX)
@@ -229,7 +237,7 @@ export default function AsciiWorld({
         if (cancelled || !data?.ok || !isWeather(data.weather)) return
         live = { from: lastWea, to: data.weather, at: performance.now() }
         if (typeof data.code === "number") {
-          setClima({ label: weatherLabel(data.code), city: typeof data.city === "string" ? data.city : "" })
+          onClimaRef.current?.({ label: weatherLabel(data.code), city: typeof data.city === "string" ? data.city : "" })
         }
         if (typeof data.sunrise === "number" && typeof data.sunset === "number" && data.sunrise < data.sunset) {
           sun = { sunrise: data.sunrise, sunset: data.sunset }
@@ -239,7 +247,7 @@ export default function AsciiWorld({
       }
     }
     let climaTimer: ReturnType<typeof setInterval> | undefined
-    if (forcedWeather) setClima({ label: climaParam, city: "" })
+    if (forcedWeather) onClimaRef.current?.({ label: climaParam, city: "" })
     else {
       fetchClima()
       climaTimer = setInterval(fetchClima, 15 * 60 * 1000)
@@ -806,7 +814,6 @@ export default function AsciiWorld({
       <div aria-hidden="true" className="pointer-events-none absolute inset-0">
         <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
         <canvas ref={glowRef} className="absolute inset-0 h-full w-full opacity-80 mix-blend-screen blur-md" />
-        <div className="ascii-scanlines absolute inset-0" />
       </div>
 
       <div ref={layerRef} aria-hidden="true" className="absolute inset-0 touch-none select-none" />
@@ -819,14 +826,14 @@ export default function AsciiWorld({
           onClick={enterPortal}
           aria-label={scene.portal.aria}
           style={{ position: "absolute", left: 0, top: 0, visibility: "hidden" }}
-          className="ts-px-btn ts-px-btn--primary pointer-events-auto z-20 h-6 gap-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.15em] will-change-transform"
+          className="ts-px-btn ts-px-btn--primary ts-os pointer-events-auto z-20 h-7 gap-1.5 px-2.5 lowercase will-change-transform"
         >
           {scene.portal.label}
           <PixelIcon name="right" className="h-2.5 w-2.5" />
         </button>
       )}
 
-      <div className="pointer-events-none absolute z-20 flex flex-col gap-2 left-3 bottom-[3.9rem] items-start sm:inset-x-0 sm:bottom-20 sm:items-center">
+      <div className="pointer-events-none absolute bottom-3 left-3 z-20 flex flex-col items-start gap-2 sm:inset-x-0 sm:bottom-4 sm:items-center">
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -851,12 +858,6 @@ export default function AsciiWorld({
             <PixelIcon name="right" className="h-2.5 w-2.5" />
           </button>
         </div>
-        {clima && (
-          <p className="max-w-[55vw] truncate font-mono sm:max-w-[90vw] text-[10px] lowercase tracking-[0.15em] text-white/60">
-            <span className="text-[#5cff8a]">&gt;</span> {clima.label}
-            {clima.city && <span> · {clima.city}</span>}
-          </p>
-        )}
       </div>
     </>
   )
