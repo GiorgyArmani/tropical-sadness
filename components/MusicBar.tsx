@@ -2,6 +2,7 @@
 
 import { useRef, useState, useEffect, useImperativeHandle, type Ref } from "react"
 import OsIcon from "./OsIcon"
+import { BOOTED_EVENT, POWER_EVENT } from "./power"
 
 // Lo que está al aire. Es una radio: no se elige tema ni se adelanta, se sintoniza.
 // `scene` lleva al visitante al escenario del mix (ver components/ascii/scenes)
@@ -127,12 +128,28 @@ export default function MusicBar({ ref, silenced = false }: { ref?: Ref<RadioHan
     }
   }, [volume])
 
+  // Al encender, la radio arranca dentro del toque (si no, el navegador no la deja sonar) pero callada
+  // hasta que termina la animación de arranque. Con muted y no con volume, que en iPhone no se puede cambiar
+  const [booting, setBooting] = useState(true)
+  useEffect(() => {
+    const onBooted = () => setBooting(false)
+    const onPower = (e: Event) => {
+      if ((e as CustomEvent).detail === false) setBooting(true)
+    }
+    window.addEventListener(BOOTED_EVENT, onBooted)
+    window.addEventListener(POWER_EVENT, onPower)
+    return () => {
+      window.removeEventListener(BOOTED_EVENT, onBooted)
+      window.removeEventListener(POWER_EVENT, onPower)
+    }
+  }, [])
+
   useEffect(() => {
     if (audioRef.current) {
       audioRef.current.volume = (volume / 100) * duck.current
-      audioRef.current.muted = muted
+      audioRef.current.muted = muted || booting
     }
-  }, [volume, muted])
+  }, [volume, muted, booting])
 
   const toggle = () => {
     if (isPlaying) audioRef.current?.pause()

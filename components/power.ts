@@ -6,6 +6,7 @@ import { useSyncExternalStore } from "react"
 // ventana del navegador. Cada cambio se avisa por window dentro del mismo gesto, así quien lo escucha
 // todavía puede hacer sonar audio (la radio, los sonidos de encender y apagar).
 export const POWER_EVENT = "ts-power" // detail: true = se encendió, false = se apagó
+export const BOOTED_EVENT = "ts-booted" // terminó (o se saltó) la animación de arranque
 
 let powered = false
 

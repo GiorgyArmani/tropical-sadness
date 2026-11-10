@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
 import { playBootSound, playShutdownSound } from "./bootSound"
 import OsIcon from "./OsIcon"
-import { POWER_EVENT, setPower } from "./power"
+import { BOOTED_EVENT, POWER_EVENT, setPower } from "./power"
 
 const POST = [
   "tropiBIOS 4.20 · tropical sadness 革命",
@@ -52,9 +52,10 @@ export default function BootScreen() {
     return () => window.removeEventListener("keydown", onKey, true)
   }, [phase, power, skip])
 
-  // En uso: desde la página apagan el sistema (setPower(false))
+  // En uso: avisa que terminó el arranque, y desde la página apagan el sistema (setPower(false))
   useEffect(() => {
     if (phase !== "done") return
+    window.dispatchEvent(new Event(BOOTED_EVENT))
     const onPower = (e: Event) => {
       if ((e as CustomEvent).detail !== false) return
       playShutdownSound()
