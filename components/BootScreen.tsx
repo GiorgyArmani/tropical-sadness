@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
 import { playBootSound, playShutdownSound } from "./bootSound"
 import OsIcon from "./OsIcon"
-import { BOOTED_EVENT, POWER_EVENT, setPower } from "./power"
+import { BOOTED_EVENT, POWER_EVENT, isReady, setPower } from "./power"
 
 const POST = [
   "tropiBIOS 4.20 · tropical sadness 革命",
@@ -28,6 +28,7 @@ export default function BootScreen() {
   const [phase, setPhase] = useState<Phase>("off")
 
   const power = useCallback(() => {
+    if (!isReady()) return
     stopSound.current = playBootSound(window.matchMedia("(prefers-reduced-motion: reduce)").matches)
     setPower(true)
     setPhase("on")

@@ -10,6 +10,14 @@ export const BOOTED_EVENT = "ts-booted" // terminó (o se saltó) la animación 
 
 let powered = false
 
+// La página avisa cuando ya escucha el encendido. Antes de eso encender no hace nada: el aviso se
+// perdería y la radio no arrancaría dentro del toque (pasa en la primera visita, con la red lenta)
+let ready = false
+export const setReady = () => {
+  ready = true
+}
+export const isReady = () => ready
+
 export const setPower = (on: boolean) => {
   powered = on
   window.dispatchEvent(new CustomEvent(POWER_EVENT, { detail: on }))

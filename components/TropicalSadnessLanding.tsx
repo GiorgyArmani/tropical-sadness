@@ -12,7 +12,7 @@ import { KIND, LEVELS, SCENE_OF, nextDoorOf, type Entry } from "./ascii3d/maze"
 import { SCENES_3D } from "./ascii3d/scenes"
 import OsIcon, { type OsIconName } from "./OsIcon"
 import PixelIcon from "./PixelIcon"
-import { POWER_EVENT, setPower, usePowered } from "./power"
+import { POWER_EVENT, setPower, setReady, usePowered } from "./power"
 import SocialLinks from "./SocialLinks"
 import ChatRoom, { ChatToggle } from "./ChatRoom"
 import RadioGate from "./RadioGate"
@@ -229,6 +229,11 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
     }
     window.addEventListener(POWER_EVENT, onPower)
     return () => window.removeEventListener(POWER_EVENT, onPower)
+  }, [saved])
+
+  // Ya se sabe si hay nombre y el aviso de encendido tiene quién lo escuche: se puede encender
+  useEffect(() => {
+    if (saved !== null) setReady()
   }, [saved])
 
 
