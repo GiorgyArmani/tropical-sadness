@@ -18,7 +18,7 @@ export const welcomeMail = (nick: string, site: string) => ({
   text:
     `hola, ${nick}.\n\n` +
     "tu avatar ya quedó guardado en tu cuenta de Tropical Sadness: así te ven los demás en las salas.\n" +
-    "entra con este mismo email en cualquier dispositivo y lo tendrás contigo.\n\n" +
+    "entra con tu email y tu contraseña en cualquier dispositivo y lo tendrás contigo.\n\n" +
     `${site}/\n`,
   html: `<!doctype html>
 <html lang="es">
@@ -66,7 +66,7 @@ export const welcomeMail = (nick: string, site: string) => ({
 </td></tr>
 
 <tr><td align="center" style="padding:14px 12px 20px;${FONT};color:#14101f">
-<p style="margin:0 0 16px;text-align:left">entra con este mismo email en cualquier dispositivo y lo tendrás contigo.</p>
+<p style="margin:0 0 16px;text-align:left">entra con tu email y tu contraseña en cualquier dispositivo y lo tendrás contigo.</p>
 <a href="${site}/" style="display:inline-block;padding:7px 22px;background:#ffd600;color:#000000;text-decoration:none;${FONT};border:2px solid;border-color:#fffbe0 #000000 #000000 #fffbe0">entrar a tropi.OS</a>
 </td></tr>
 

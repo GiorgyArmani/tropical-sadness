@@ -21,6 +21,7 @@ import { saveNick, useSavedNick } from "./useSavedNick"
 import { saveLook, useSavedLook } from "./useSavedLook"
 import { pushProfile, startProfileSync } from "./profile"
 import WelcomeMail from "./WelcomeMail"
+import ConfirmLink from "./ConfirmLink"
 
 // El sampler pesa (motor de audio y su interfaz): se baja recién al entrar al estudio
 const Sampler = dynamic(() => import("./sampler/Sampler"), { ssr: false })
@@ -407,13 +408,13 @@ export default function TropicalSadnessLanding({ initialMode = "2d" }: { initial
           onClose={closeAvatar}
           onSave={(l) => {
             saveLook(l)
-            pushProfile(true)
-            setAvatarOpen(false)
+            pushProfile()
           }}
         />
       )}
 
       <WelcomeMail nick={nick} look={look} />
+      <ConfirmLink />
 
       {saved === "" && (
         <RadioGate

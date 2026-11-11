@@ -1,7 +1,12 @@
 -- Perfiles de Tropical Sadness: el nick y el avatar de cada persona, guardados en su cuenta.
 -- Se pega entero en Supabase > SQL Editor y se ejecuta una vez (se puede volver a correr sin romper nada).
--- Usa la misma sesión anónima del chat (supabase/foro.sql). Con un email se vuelve permanente y se
--- recupera en otro dispositivo.
+-- El avatar pide una cuenta con email y contraseña (se crea en el creador de avatares): con ella se
+-- recupera en otro dispositivo. El chat sigue con su sesión anónima (supabase/foro.sql).
+--
+-- Quien acepta los correos de novedades queda marcado en los datos de su cuenta (promo: la fecha en que
+-- aceptó). La lista se saca desde el SQL Editor:
+--   select email, raw_user_meta_data->>'promo' as desde from auth.users
+--   where email_confirmed_at is not null and raw_user_meta_data->>'promo' is not null;
 
 -- 1) La tabla: una fila por persona
 create table if not exists public.profiles (

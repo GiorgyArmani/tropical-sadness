@@ -2,8 +2,9 @@
 
 // El perfil en Supabase (tabla profiles, ver supabase/perfiles.sql): el nick y el avatar de cada quien.
 // El dispositivo guarda una copia (useSavedNick, useSavedLook) y la cuenta manda: al entrar se baja lo
-// guardado y al cambiar algo se sube. Con un email la cuenta anónima se vuelve permanente y se
-// recupera en otro dispositivo.
+// guardado y al cambiar algo se sube. El chat sigue siendo anónimo; el avatar pide una cuenta con email
+// y contraseña (se crea en el creador de avatares), y con ella se recupera en otro dispositivo sin
+// esperar ningún correo.
 
 import { cleanLook } from "./ascii3d/engine/avatars"
 import { cleanNick } from "./ChatRoom"
@@ -11,16 +12,13 @@ import { AUTH_EVENT, getClient, maybeSession } from "./supabase"
 import { readLook, saveLook } from "./useSavedLook"
 import { readNick, saveNick } from "./useSavedNick"
 
-// Sube el nick y el avatar de este dispositivo. create: si no hay sesión, crea la anónima (solo al
-// guardar un avatar: así no se crea una cuenta por cada visita)
-export const pushProfile = async (create = false) => {
+// Sube el nick y el avatar de este dispositivo a la sesión que haya (sin sesión no hay a dónde subir)
+export const pushProfile = async () => {
   const nick = readNick()
-  // Sin sesión guardada no hay a dónde subir, salvo que haya que crearla
-  if (!nick || (!create && !maybeSession())) return
+  if (!nick || !maybeSession()) return
   const sb = await getClient()
   if (!sb) return
-  let { session } = (await sb.auth.getSession()).data
-  if (!session && create) session = (await sb.auth.signInAnonymously()).data.session
+  const { session } = (await sb.auth.getSession()).data
   if (!session) return
   const look = readLook()
   await sb.from("profiles").upsert({ user_id: session.user.id, nick, ...(look ? { look } : {}) })
@@ -42,6 +40,8 @@ const pullProfile = async () => {
     if (nick && nick !== readNick()) saveNick(nick)
     const look = cleanLook(row.look)
     if (look && JSON.stringify(look) !== JSON.stringify(readLook())) saveLook(look)
+    // La cuenta todavía no tiene avatar (se confirmó en otro navegador): sube el de acá
+    else if (!look && readLook()) await pushProfile()
   }
   // Con el avatar ya al día, la bienvenida: una sola vez, y recién con el email confirmado
   const { user } = session
@@ -63,8 +63,27 @@ export const sendWelcome = async (shot: string) => {
   if (res?.ok) await sb.auth.refreshSession()
 }
 
-// Una vez al cargar la página: baja el perfil, y otra vez cada vez que se entra con email (el enlace
-// del correo vuelve a la página con la sesión nueva). Devuelve cómo dejar de escuchar
+// La cuenta recién creada que espera la confirmación del correo, con lo que hace falta para entrar. Vive
+// solo en memoria. En el celular el enlace del correo suele abrirse en otro navegador: al volver a esta
+// página se entra sola, y el avatar armado acá sube a la cuenta
+let pending: { email: string; password: string } | null = null
+let entering = false
+const enterPending = async () => {
+  const p = pending
+  if (!p || entering || document.hidden) return
+  entering = true
+  try {
+    // Si el enlace se abrió en este mismo navegador, ya se entró
+    if (await account()) pending = null
+    else await signIn(p.email, p.password)
+  } finally {
+    entering = false
+  }
+}
+
+// Una vez al cargar la página: baja el perfil, y otra vez cada vez que se entra a una cuenta (con la
+// contraseña, o con el enlace del correo, que vuelve a la página con la sesión nueva). Devuelve cómo
+// dejar de escuchar
 export const startProfileSync = () => {
   // La bajada del arranque ya trae lo de la sesión guardada: mientras dura, los avisos son de esa misma
   // sesión (Supabase la anuncia al recuperarla) y repetirían el pedido
@@ -76,34 +95,86 @@ export const startProfileSync = () => {
     if (!starting && (event === "SIGNED_IN" || event === "USER_UPDATED")) setTimeout(pullProfile, 0)
   }
   window.addEventListener(AUTH_EVENT, onAuth)
-  return () => window.removeEventListener(AUTH_EVENT, onAuth)
+  document.addEventListener("visibilitychange", enterPending)
+  window.addEventListener("focus", enterPending)
+  return () => {
+    window.removeEventListener(AUTH_EVENT, onAuth)
+    document.removeEventListener("visibilitychange", enterPending)
+    window.removeEventListener("focus", enterPending)
+  }
 }
 
-// El email de la cuenta, o null si es anónima (o todavía no confirmó)
-export const accountEmail = async () => {
+// La cuenta de este dispositivo: su email y si aceptó los correos de novedades. null si no hay cuenta
+// (la sesión anónima del chat no cuenta)
+export const account = async () => {
   const sb = await getClient()
   const user = sb ? (await sb.auth.getSession()).data.session?.user : null
-  return user && !user.is_anonymous ? (user.email ?? null) : null
+  return user?.email && !user.is_anonymous ? { email: user.email, promo: !!user.user_metadata.promo } : null
 }
 
-// Guarda la cuenta con un email. Si ese email ya tiene cuenta, manda un enlace para entrar a ella en
-// este dispositivo (y se baja su avatar). "linked": hay que confirmar desde el correo; "login": el enlace
-// es para entrar; "limit": se mandaron muchos correos; "error": otra cosa
-export const linkEmail = async (email: string): Promise<"linked" | "login" | "limit" | "error"> => {
+// A dónde vuelven los enlaces de los correos: a esta misma página
+const here = () => window.location.origin + window.location.pathname
+const fail = (code?: string) => (code === "over_email_send_rate_limit" ? "limit" : code === "weak_password" ? "weak" : "error")
+// Aceptar los correos de novedades queda en los datos de la cuenta, con la fecha (null lo quita)
+const promoData = (promo: boolean) => ({ promo: promo ? new Date().toISOString() : null })
+
+// Crea la cuenta. "in": ya se entró; "confirm": falta abrir el correo de confirmación; "exists": ese email
+// ya tiene cuenta; "weak": contraseña floja; "limit": se mandaron muchos correos; "error": otra cosa
+export const signUp = async (email: string, password: string, promo: boolean) => {
   const sb = await getClient()
   if (!sb) return "error"
-  const redirect = window.location.origin + window.location.pathname
-  const fail = (code?: string) => (code === "over_email_send_rate_limit" ? "limit" : "error")
-  await pushProfile(true)
-  const user = (await sb.auth.getSession()).data.session?.user
-  if (user?.is_anonymous) {
-    const { error } = await sb.auth.updateUser({ email }, { emailRedirectTo: redirect })
-    if (!error) return "linked"
-    if (error.code !== "email_exists") return fail(error.code)
+  const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: here(), data: promoData(promo) } })
+  if (error) return error.code === "user_already_exists" ? "exists" : fail(error.code)
+  if (data.session) return "in"
+  // Si el email ya está registrado Supabase no da error (no delata quién tiene cuenta): devuelve un
+  // usuario sin identidades
+  if (!data.user?.identities?.length) return "exists"
+  pending = { email, password }
+  return "confirm"
+}
+
+// Entra con email y contraseña: el avatar de la cuenta baja solo (startProfileSync). "wrong": no
+// coinciden; "unconfirmed": falta confirmar el email
+export const signIn = async (email: string, password: string) => {
+  const sb = await getClient()
+  if (!sb) return "error"
+  const { error } = await sb.auth.signInWithPassword({ email, password })
+  if (!error) {
+    pending = null
+    return "in"
   }
-  const { error } = await sb.auth.signInWithOtp({
-    email,
-    options: { shouldCreateUser: false, emailRedirectTo: redirect },
-  })
-  return error ? fail(error.code) : "login"
+  return error.code === "invalid_credentials" ? "wrong" : error.code === "email_not_confirmed" ? "unconfirmed" : "error"
+}
+
+// Para quien olvidó la contraseña (o tiene una cuenta de antes, sin contraseña): un correo con el enlace
+// para poner una nueva (la pide ConfirmLink al llegar)
+export const sendReset = async (email: string) => {
+  const sb = await getClient()
+  if (!sb) return "error"
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: here() })
+  return error ? fail(error.code) : "reset"
+}
+
+// Los enlaces de los correos (supabase/correos) llegan a esta web con un código de un solo uso en la
+// dirección (?token_hash=). Con él se entra a la cuenta: el avatar sube o baja solo (startProfileSync).
+// type: "email" confirma una cuenta nueva; "recovery" es el del cambio de contraseña. Devuelve si se pudo
+// (false: el código ya se usó o venció)
+export const confirmLink = async (code: string, type: "email" | "recovery") => {
+  const sb = await getClient()
+  if (!sb) return false
+  return !(await sb.auth.verifyOtp({ token_hash: code, type })).error
+}
+
+export const setPassword = async (password: string) => {
+  const sb = await getClient()
+  if (!sb) return "error"
+  const { error } = await sb.auth.updateUser({ password })
+  return error ? fail(error.code) : "saved"
+}
+
+// Acepta o deja de recibir los correos de novedades. Devuelve si quedó guardado
+export const setPromo = async (promo: boolean) => {
+  const sb = await getClient()
+  if (!sb) return false
+  return !(await sb.auth.updateUser({ data: promoData(promo) })).error
 }

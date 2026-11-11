@@ -1,0 +1,45 @@
+<!-- Correo de Supabase para cambiar la contraseña (para quien la olvidó), con la ventana de tropi.OS del correo
+     de bienvenida (app/api/bienvenida/mail.ts). Se pega entero en Supabase > Authentication > Emails >
+     Reset password. Asunto: cambia tu contraseña de Tropical Sadness 革命
+     El botón lleva a nuestra web (a la página donde se pidió el cambio) con un código de un solo uso en la
+     dirección; ahí components/ConfirmLink.tsx pide la contraseña nueva -->
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
+<title>cambia tu contraseña de Tropical Sadness</title>
+</head>
+<body style="margin:0;padding:0;background:#07060f">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="#07060f" style="background:#07060f">
+<tr><td align="center" style="padding:24px 10px">
+
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="420" bgcolor="#c9c5d6" style="width:100%;max-width:420px;background:#c9c5d6;border:2px solid;border-color:#ffffff #17122b #17122b #ffffff">
+<tr><td style="padding:3px">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+
+<tr><td bgcolor="#8a2bb0" style="background:#8a2bb0;background-image:linear-gradient(90deg,#2a1670,#8a2bb0 55%,#e8479f);padding:3px 6px;font-family:'DotGothic16','MS Gothic','Courier New',monospace;font-size:16px;line-height:1.35;color:#ffffff;font-weight:bold">tu contraseña</td></tr>
+
+<tr><td height="3" style="height:3px;font-size:0;line-height:0">&nbsp;</td></tr>
+
+<tr><td align="center" bgcolor="#0b0717" style="background:#0b0717;padding:26px 12px;border:2px solid;border-color:#827d99 #ffffff #ffffff #827d99">
+<img src="https://tropicalsadness.com/logo-trim.png" width="170" alt="Tropical Sadness 革命" style="display:block;border:0;width:170px;height:auto">
+</td></tr>
+
+<tr><td align="center" style="padding:16px 12px 20px;font-family:'DotGothic16','MS Gothic','Courier New',monospace;font-size:16px;line-height:1.35;color:#14101f">
+<p style="margin:0 0 10px;text-align:left">hola.</p>
+<p style="margin:0 0 16px;text-align:left">con este botón pones una contraseña nueva y entras a tu cuenta.</p>
+<a href="{{ .RedirectTo }}?token_hash={{ .TokenHash }}&amp;type=recovery" style="display:inline-block;padding:7px 22px;background:#ffd600;color:#000000;text-decoration:none;font-family:'DotGothic16','MS Gothic','Courier New',monospace;font-size:16px;line-height:1.35;border:2px solid;border-color:#fffbe0 #000000 #000000 #fffbe0">cambiar mi contraseña</a>
+</td></tr>
+
+</table>
+</td></tr>
+</table>
+
+<p style="margin:16px 0 0;font-family:'DotGothic16','MS Gothic','Courier New',monospace;font-size:12px;line-height:1.35;color:#827d99">recibes este correo porque pediste cambiar tu contraseña en Tropical Sadness. si no fuiste tú, ignóralo: tu contraseña sigue igual.</p>
+
+</td></tr>
+</table>
+</body>
+</html>
