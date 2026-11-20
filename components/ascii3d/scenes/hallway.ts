@@ -40,7 +40,7 @@ vec4 eyePair(float i, float kind) {
 // --- El laberinto (misma cuenta que maze.ts) ---
 // Número de puerta en esta parte del pasillo: la 0 está en z = 0 y se avanza hacia -z
 float doorIdx(float z) { return mod(floor((-z + 3.0) / 6.0), 100.0); }
-// 0 cerrada, 1 isla, 2 cementerio, 3 escalera, 4 otro pasillo, 5 niebla, 6 orilla, 7 cresta, 8 estudio
+// 0 cerrada, 1 isla, 2 cementerio, 3 escalera, 4 otro pasillo, 5 niebla, 6 orilla, 7 cresta, 8 estudio, 9 navidad
 // (misma cuenta que kindAt en maze.ts)
 float doorKind(float n) {
   if (n < 0.5) return 0.0;
@@ -49,9 +49,9 @@ float doorKind(float n) {
   if (abs(i - 2.0) < 0.5 || abs(i - 5.0) < 0.5) return 4.0;
   float s = abs(i - 4.0) < 0.5 ? 0.0 : (abs(i - 7.0) < 0.5 ? 1.0 : -1.0);
   if (s > -0.5) {
-    float e = mod(floor((k + 0.5) / 8.0) * 2.0 + s + uLevel + 0.5, 7.0) - 0.5;
+    float e = mod(floor((k + 0.5) / 8.0) * 2.0 + s + uLevel + 0.5, 8.0) - 0.5;
     if (e < 2.5) return e + 1.0; // isla, cementerio, escalera
-    return e + 2.0; // niebla, orilla, cresta, estudio (el 4 es el otro pasillo)
+    return e + 2.0; // niebla, orilla, cresta, estudio, navidad (el 4 es el otro pasillo)
   }
   return 0.0;
 }
@@ -65,7 +65,8 @@ vec3 kindColor(float k) {
   if (k < 5.5) return vec3(0.45, 0.62, 1.0); // niebla: azul frío
   if (k < 6.5) return vec3(0.72, 0.42, 1.0); // orilla: violeta
   if (k < 7.5) return vec3(0.55, 1.0, 0.35); // cresta: verde de montaña
-  return vec3(1.0, 0.3, 0.7); // estudio: rosa de neón
+  if (k < 8.5) return vec3(1.0, 0.3, 0.7); // estudio: rosa de neón
+  return vec3(0.9, 0.95, 1.0); // navidad: blanco de nieve
 }
 // La luz de los tubos cambia con el nivel: amarillo, rojo de emergencia, verde enfermizo
 vec3 levelLight() {
@@ -261,6 +262,7 @@ const KIND_COLOR: V3[] = [
   [0.72, 0.42, 1.0], // orilla
   [0.55, 1.0, 0.35], // cresta
   [1.0, 0.3, 0.7], // estudio
+  [0.9, 0.95, 1.0], // navidad
 ]
 const SCARE_RED: V3 = [1.4, 0.1, 0.06] // pasada de 1: el rojo puro se ve oscuro, así la habitación se sigue leyendo
 const TUBE_GAP = 4 // un tubo cada 4 m (z = 4k), igual que el shader

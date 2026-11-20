@@ -9,15 +9,15 @@ export const DOOR_GAP = 6
 export const DOORS = 100
 export const LEVELS = 3
 
-export const KIND = { cerrada: 0, isla: 1, cementerio: 2, escalera: 3, pasillo: 4, niebla: 5, orilla: 6, cresta: 7, estudio: 8 } as const
+export const KIND = { cerrada: 0, isla: 1, cementerio: 2, escalera: 3, pasillo: 4, niebla: 5, orilla: 6, cresta: 7, estudio: 8, navidad: 9 } as const
 
 // Backrooms: en cada tramo de 8 puertas, 2 llevan a otro pasillo (posiciones 2 y 5) y 2 a un entorno
 // (la 4 a la derecha y la 7 a la izquierda). Los entornos rotan de una puerta a la siguiente entre isla,
-// cementerio, escalera, niebla, orilla, cresta y estudio, así nunca se repite el mismo dos veces seguidas. El resto, cerradas.
+// cementerio, escalera, niebla, orilla, cresta, estudio y navidad, así nunca se repite el mismo dos veces seguidas. El resto, cerradas.
 const CYCLE = 8
 const HALL_AT = [2, 5]
 const PLACE_AT = [4, 7]
-const PLACES = [KIND.isla, KIND.cementerio, KIND.escalera, KIND.niebla, KIND.orilla, KIND.cresta, KIND.estudio]
+const PLACES = [KIND.isla, KIND.cementerio, KIND.escalera, KIND.niebla, KIND.orilla, KIND.cresta, KIND.estudio, KIND.navidad]
 
 export const kindAt = (level: number, door: number): number => {
   const n = ((door % DOORS) + DOORS) % DOORS
@@ -42,6 +42,7 @@ export const SCENE_OF: Record<number, string> = {
   [KIND.orilla]: "orilla",
   [KIND.cresta]: "cresta",
   [KIND.estudio]: "estudio",
+  [KIND.navidad]: "navidad",
 }
 
 export const LABEL_OF: Record<number, string> = {
@@ -53,6 +54,7 @@ export const LABEL_OF: Record<number, string> = {
   [KIND.orilla]: "orilla",
   [KIND.cresta]: "cresta",
   [KIND.estudio]: "estudio",
+  [KIND.navidad]: "navidad",
 }
 
 // La primera puerta de un tipo desde una puerta dada, hacia adelante
