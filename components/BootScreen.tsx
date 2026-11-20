@@ -14,7 +14,7 @@ import { BOOTED_EVENT, POWER_EVENT, isReady, setPower } from "./power"
 const POST = [
   "tropiBIOS 4.20 · tropical sadness 革命",
   "memoria: 640K de tristeza ... ok",
-  "radio ... al aire",
+  "tropicks fm ... al aire",
   "isla ... encontrada",
   "iniciando tropi.OS",
 ]

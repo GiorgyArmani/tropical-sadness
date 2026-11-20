@@ -39,6 +39,7 @@ const CREASE = 4 // esquina sin dirección todavía: la decide la votación
 
 const FONT_PX = 8 // letra chica: más celdas, más detalle
 const FONT_PX_SMALL = 7 // en pantallas angostas
+const FONT_PX_PHONE = 5 // en el celular, lo más chica que llega (arranca un punto más grande: ver coarse)
 const MAX_CELLS = 70000
 const MAX_COARSE = 4
 
@@ -112,6 +113,7 @@ export class AsciiFilm {
     this.creases = !phone
     this.creasesFailed = phone
     this.subFailed = phone
+    this.coarse = phone ? 1 : 0 // el celular arranca en 6 px y baja a 5 si sobra tiempo
     this.gctx = glowCanvas?.getContext("2d") ?? null
   }
 
@@ -128,7 +130,7 @@ export class AsciiFilm {
       this.glowCanvas.width = Math.ceil(W / 4)
       this.glowCanvas.height = Math.ceil(H / 4)
     }
-    let px = (W < 640 ? FONT_PX_SMALL : FONT_PX) + this.coarse
+    let px = (this.phone ? FONT_PX_PHONE : W < 640 ? FONT_PX_SMALL : FONT_PX) + this.coarse
     const measure = () => {
       ctx.font = FONT(px)
       return ctx.measureText("M").width
@@ -195,7 +197,7 @@ export class AsciiFilm {
       }
       if (this.coarse >= MAX_COARSE) return false
       this.coarse++
-    } else if (ms < 9 && this.coarse > 0) this.coarse--
+    } else if (ms < (this.phone ? 12 : 9) && this.coarse > 0) this.coarse--
     else if (room && !this.creases && !this.creasesFailed) {
       this.creases = true
       return true

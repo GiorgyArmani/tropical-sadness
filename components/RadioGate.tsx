@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, type FormEvent } from "react"
-import { NOW_PLAYING } from "./MusicBar"
+import { NOW_PLAYING, RADIO_NAME } from "./MusicBar"
 import { NICK_LEN, cleanNick } from "./ChatRoom"
 import OsIcon from "./OsIcon"
 
@@ -18,7 +18,7 @@ export default function RadioGate({ onConnect }: { onConnect: (nick: string) => 
 
   return (
     <div className="ts-dither fixed inset-0 z-50 flex items-center justify-center px-4">
-      <form onSubmit={submit} aria-label="Conectarse a la radio" className="ts-win ts-win--float ts-os w-full max-w-sm">
+      <form onSubmit={submit} aria-label={`Conectarse a ${RADIO_NAME}`} className="ts-win ts-win--float ts-os w-full max-w-sm">
         <p className="ts-win-title ts-bold">
           <OsIcon name="key" />
           <span className="min-w-0 flex-1 truncate">entrar a tropi.OS</span>
@@ -30,7 +30,7 @@ export default function RadioGate({ onConnect }: { onConnect: (nick: string) => 
             <p className="ts-lcd px-2 py-1.5 leading-tight" title={`${NOW_PLAYING.title} · ${NOW_PLAYING.artist}`}>
               <span className="flex items-center gap-2 text-white">
                 <span className="ts-onair h-2 w-2 bg-[#ff3b3b]" aria-hidden="true" />
-                al aire
+                {RADIO_NAME} · al aire
               </span>
               <span className="mt-1 block truncate">{NOW_PLAYING.title}</span>
               <span className="block truncate">{NOW_PLAYING.artist}</span>

@@ -116,7 +116,8 @@ export class GlyphGL {
   private apply() {
     const gl = this.gl!
     const s = this.size!
-    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    // Hasta 3x: en los iPhone la letra chica del celular se ve nítida y no estirada
+    const dpr = Math.min(window.devicePixelRatio || 1, 3)
     const canvas = this.canvas
     canvas.width = Math.round(s.W * dpr)
     canvas.height = Math.round(s.H * dpr)

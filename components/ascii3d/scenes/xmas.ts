@@ -261,7 +261,9 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float m, float ao) {
   if (m < 1.5) {
     // Nieve azulada con destellos chiquitos que brillan al moverse
     float spark = step(0.985, hash2(floor(p.xz * 22.0))) * step(0.5, fract(hash2(floor(p.xz * 22.0) + 3.0) + uTime * 0.3));
-    return vec3(0.72, 0.78, 0.9) * light * (0.6 + 0.4 * ao) + vec3(0.9, 0.95, 1.0) * spark * 0.35 * exp(-length(p - uRo) * 0.15);
+    // Más oscura que blanca y con vetas: así el ASCII no la llena de letras pesadas y se lee el relieve
+    float drift = 0.7 + 0.3 * fbm2(p.xz * 1.7 + vec2(p.z * 0.3, 0.0));
+    return vec3(0.45, 0.5, 0.62) * drift * light * (0.6 + 0.4 * ao) +vec3(0.9, 0.95, 1.0) * spark * 0.35 * exp(-length(p - uRo) * 0.15);
   }
   if (m < 2.5) return vec3(0.35, 0.3, 0.28) * light;
   // Adentro de la puerta: el pasillo, que titila un poco

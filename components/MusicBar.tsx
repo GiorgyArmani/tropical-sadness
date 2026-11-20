@@ -4,6 +4,9 @@ import { useRef, useState, useEffect, useImperativeHandle, type Ref } from "reac
 import OsIcon from "./OsIcon"
 import { BOOTED_EVENT, POWER_EVENT } from "./power"
 
+// El nombre de la radio
+export const RADIO_NAME = "Tropicks FM"
+
 // Lo que está al aire. Es una radio: no se elige tema ni se adelanta, se sintoniza.
 // `scene` lleva al visitante al escenario del mix (ver components/ascii/scenes)
 export const NOW_PLAYING: { title: string; artist: string; file: string; scene?: string } = {
@@ -156,12 +159,12 @@ export default function MusicBar({ ref, silenced = false }: { ref?: Ref<RadioHan
     else connect()
   }
 
-  const label = `${NOW_PLAYING.title} · ${NOW_PLAYING.artist}`
+  const label = `${RADIO_NAME} · ${NOW_PLAYING.title} · ${NOW_PLAYING.artist}`
 
   // La radio es la parte de la barra de tareas que va a la izquierda: el botón de inicio conecta y
   // desconecta, el visor dice qué suena y al lado quedan el silencio y el volumen
   return (
-    <div role="region" aria-label="Radio" hidden={silenced} className="flex min-w-0 flex-1 items-center gap-1">
+    <div role="region" aria-label={RADIO_NAME} hidden={silenced} className="flex min-w-0 flex-1 items-center gap-1">
       <audio ref={audioRef} src={NOW_PLAYING.file} preload="metadata" loop />
 
       <button
